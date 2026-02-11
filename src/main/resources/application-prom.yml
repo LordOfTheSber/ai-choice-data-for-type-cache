@@ -1,0 +1,16 @@
+server:
+  ssl:
+    enabled: true
+    key-store: classpath:tls/master-keystore.p12
+    key-store-password: changeit
+    key-store-type: PKCS12
+    key-alias: master
+    enabled-protocols: TLSv1.3
+    # mTLS readiness: switch to "need" to enforce client certificates.
+    client-auth: want
+
+http3:
+  enabled: true
+  port: 8443
+  # TODO: bind Jetty HTTP/3 connector with QUIC configuration via JettyServerCustomizer.
+  # TODO: add QUIC certificates and transport tuning (idle timeout, stream/window limits).
