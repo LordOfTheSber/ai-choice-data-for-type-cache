@@ -243,6 +243,8 @@ public class LogStreamingService {
             if (first) {
                 stitched.addAll(snapshot);
                 first = false;
+            } else if (waitForSchedule) {
+                stitched.addAll(snapshot);
             } else {
                 stitchSnapshots(stitched, snapshot);
             }
