@@ -160,7 +160,15 @@ public class LogStreamingService {
                                          Integer pollIntervalSeconds,
                                          AtomicLong unparsedCounter,
                                          boolean waitForSchedule) throws IOException {
-        if (from == null || to == null || !from.isBefore(to)) {
+        if (from == null || to == null) {
+            return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
+        }
+
+        if (from.equals(to) && pollIntervalSeconds != null && pollIntervalSeconds > 0) {
+            to = to.plusSeconds(59);
+        }
+
+        if (!from.isBefore(to)) {
             return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
         }
 
@@ -177,10 +185,6 @@ public class LogStreamingService {
         boolean first = true;
 
         while (!cursor.isAfter(hardLimit)) {
-            if (waitForSchedule) {
-                waitUntil(cursor);
-            }
-
             Instant windowEnd = cursor.plus(period);
             if (windowEnd.isAfter(to)) {
                 windowEnd = to;
@@ -273,18 +277,6 @@ public class LogStreamingService {
 
         base.add(NO_OVERLAP_MARKER);
         base.addAll(next);
-    }
-
-    private void waitUntil(Instant target) {
-        long ms = target.toEpochMilli() - System.currentTimeMillis();
-        if (ms <= 0) {
-            return;
-        }
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 
     private KubernetesClient createClient(String contour, boolean master) {
