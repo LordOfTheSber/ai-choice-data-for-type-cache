@@ -48,7 +48,14 @@ public class LogCollectJobService {
 
         JobState state = new JobState(id, initialStatus, "Started", out, Instant.now(), null);
         jobs.put(id, state);
-        log.info("Start collect job id={} output={} status={}", id, out, initialStatus);
+        log.info("Start collect job id={} output={} status={} from={} to={} pollIntervalSeconds={} maxBytes={}",
+                id,
+                out,
+                initialStatus,
+                request.from(),
+                request.to(),
+                request.pollIntervalSeconds(),
+                request.maxBytes());
 
         executor.submit(() -> runJob(id, request));
         return new LogCollectStartResponse(id, initialStatus);

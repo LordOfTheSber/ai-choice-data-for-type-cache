@@ -209,6 +209,7 @@ public class LogStreamingService {
         }
 
         if (pollIntervalSeconds == null || pollIntervalSeconds <= 0) {
+            log.warn("pollIntervalSeconds is null/<=0 for pod={} container={}; using one-shot snapshot", pod, container);
             return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
         }
 
@@ -223,6 +224,9 @@ public class LogStreamingService {
             int tickCount = 0;
 
             log.info("Scheduled collect started pod={} container={} from={} to={} period={}s", pod, container, from, to, sec);
+            if (maxBytes != null && maxBytes > 0) {
+                log.info("Scheduled collect reads full snapshots from Kubernetes; maxBytes={} is enforced while writing archive output", maxBytes);
+            }
             while (!pollTick.isAfter(hardLimit)) {
                 waitUntil(pollTick);
 
@@ -234,7 +238,7 @@ public class LogStreamingService {
                         sinceCursor,
                         pollTick,
                         previous,
-                        maxBytes,
+                        null,
                         unparsedCounter,
                         from,
                         to

@@ -38,6 +38,12 @@ const asStringArray = (value: unknown): string[] => {
   return []
 }
 
+
+const normalizePollIntervalSeconds = (value: number): number => {
+  if (!Number.isFinite(value) || value <= 0) return 5
+  return Math.max(1, Math.floor(value))
+}
+
 export function App() {
   const dispatch = useDispatch()
   const podsCache = useSelector((s: RootState) => s.cache.pods)
@@ -87,7 +93,7 @@ export function App() {
 
   useEffect(() => {
     if (!collectJobId) return
-    const every = Math.max(1000, pollIntervalSeconds * 1000)
+    const every = 5000
     const timer = setInterval(async () => {
       const resp = await fetch(`/api/v1/logs/collect/${collectJobId}`)
       if (!resp.ok) return
@@ -173,7 +179,7 @@ export function App() {
     previous,
     maxBytes: maxBytes === '' ? null : maxBytes,
     bestEffort: true,
-    pollIntervalSeconds,
+    pollIntervalSeconds: normalizePollIntervalSeconds(pollIntervalSeconds),
     masterAccess
   }), [contour, namespace, selector, selectedPods, selectedContainers, from, to, previous, maxBytes, pollIntervalSeconds, masterAccess])
 
@@ -227,7 +233,7 @@ export function App() {
         <label>Selector<input value={selector} onChange={e => setSelector(e.target.value)} placeholder="app=my-service" /></label>
         <label>From (MSK)<input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} /></label>
         <label>To (MSK)<input type="datetime-local" value={to} onChange={e => setTo(e.target.value)} /></label>
-        <label>Poll interval, sec<input type="number" value={pollIntervalSeconds} onChange={e => setPollIntervalSeconds(Number(e.target.value || 30))} /></label>
+        <label>Poll interval, sec<input type="number" value={pollIntervalSeconds} onChange={e => setPollIntervalSeconds(Number(e.target.value || 5))} /></label>
         <label>Max bytes<input type="number" value={maxBytes} onChange={e => setMaxBytes(e.target.value ? Number(e.target.value) : '')} /></label>
       </div>
       <div className="row">
