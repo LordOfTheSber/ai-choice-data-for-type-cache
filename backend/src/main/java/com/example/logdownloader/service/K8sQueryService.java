@@ -10,6 +10,7 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -73,10 +74,36 @@ public class K8sQueryService {
     public List<String> containers(String contour, String namespace, String pod) {
         try (KubernetesClient client = factory.createClient(contour)) {
             var item = client.pods().inNamespace(namespace).withName(pod).get();
-            if (item == null || item.getSpec() == null || item.getSpec().getContainers() == null) {
-                return List.of();
-            }
-            return item.getSpec().getContainers().stream().map(c -> c.getName()).sorted().toList();
+            return extractAllContainerNames(item);
         }
+    }
+
+    public List<String> containersForPods(String contour, String namespace, List<String> pods, String selector) {
+        try (KubernetesClient client = factory.createClient(contour)) {
+            List<String> targetPods = (pods != null && !pods.isEmpty()) ? pods : pods(contour, namespace, selector);
+            List<String> names = new ArrayList<>();
+            for (String pod : targetPods) {
+                var item = client.pods().inNamespace(namespace).withName(pod).get();
+                names.addAll(extractAllContainerNames(item));
+            }
+            return names.stream().distinct().sorted().toList();
+        }
+    }
+
+    private List<String> extractAllContainerNames(Pod item) {
+        if (item == null || item.getSpec() == null) {
+            return List.of();
+        }
+        List<String> names = new ArrayList<>();
+        if (item.getSpec().getContainers() != null) {
+            names.addAll(item.getSpec().getContainers().stream().map(c -> c.getName()).toList());
+        }
+        if (item.getSpec().getInitContainers() != null) {
+            names.addAll(item.getSpec().getInitContainers().stream().map(c -> c.getName()).toList());
+        }
+        if (item.getSpec().getEphemeralContainers() != null) {
+            names.addAll(item.getSpec().getEphemeralContainers().stream().map(c -> c.getName()).toList());
+        }
+        return names.stream().distinct().sorted().toList();
     }
 }

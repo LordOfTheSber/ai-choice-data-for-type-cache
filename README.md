@@ -2,7 +2,7 @@
 
 ## Structure
 - `backend` — Spring Boot 3 / Java 21 / Fabric8 Kubernetes Client
-- `frontend` — Vite + React + TypeScript
+- `frontend` — Vite + React + TypeScript (modernized UI/UX)
 
 ## Connection semantics (ported as-is)
 - `K8sClientFactory.createClient(contour)` → `testsK8sUrl + testsK8sToken`
@@ -34,18 +34,30 @@ npm install
 npm run dev
 ```
 
+## What changed
+- UI state (namespace/selector/pods/containers/time range/options) is persisted to file-backed storage via backend endpoint `PUT/GET /api/v1/preferences` (`backend/data/ui-preferences.json` at runtime).
+- Time-window log reading supports periodic chunking (`pollIntervalSeconds`) from `from` (x) to `to` (y) with stitching.
+- Container discovery includes regular + init + ephemeral containers. Added `GET /api/v1/containers` for complete container list for selected pods/selector.
+
 ## API examples
 ```bash
 curl 'http://localhost:8080/api/v1/contours'
 curl 'http://localhost:8080/api/v1/namespaces?contour=contour-a'
+curl 'http://localhost:8080/api/v1/containers?contour=contour-a&namespace=default&selector=app=my-app'
+curl 'http://localhost:8080/api/v1/preferences'
+
+curl -X PUT 'http://localhost:8080/api/v1/preferences' \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace":"default","selector":"app=my-app"}'
+
 curl -X POST 'http://localhost:8080/api/v1/logs/preview' \
   -H 'Content-Type: application/json' \
-  -d '{"contour":"contour-a","namespace":"default","selector":"app=my-app","from":"2025-01-01T00:00:00Z","to":"2025-01-01T01:00:00Z","bestEffort":true}'
+  -d '{"contour":"contour-a","namespace":"default","selector":"app=my-app","from":"2025-01-01T00:00:00Z","to":"2025-01-01T01:00:00Z","pollIntervalSeconds":30,"bestEffort":true}'
 
 curl -X POST 'http://localhost:8080/api/v1/logs/download' \
   -H 'Content-Type: application/json' \
   -o logs.zip \
-  -d '{"contour":"contour-a","namespace":"default","selector":"app=my-app","bestEffort":true}'
+  -d '{"contour":"contour-a","namespace":"default","selector":"app=my-app","pollIntervalSeconds":30,"bestEffort":true}'
 ```
 
 ## Kubernetes deploy
@@ -53,6 +65,6 @@ curl -X POST 'http://localhost:8080/api/v1/logs/download' \
 - Apply `backend/k8s/rbac.yaml` then `backend/k8s/deployment.yaml`.
 
 ## Assumptions
-- Log lines may start with RFC3339/ISO timestamp; non-parsable lines are retained and counted.
-- `to` filtering is done server-side after stream starts from `from`/`sinceTime`.
+- Log lines should start with RFC3339/ISO timestamp for strict window chunking.
+- Non-parsable lines are retained for non-window mode and are counted in metadata.
 - Any pod/container failure goes into `errors/<pod>.txt`; with `bestEffort=false` request fails fast.

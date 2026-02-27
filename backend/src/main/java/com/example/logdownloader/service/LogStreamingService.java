@@ -18,6 +18,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -48,22 +49,9 @@ public class LogStreamingService {
         try (KubernetesClient client = createClient(req.contour(), req.masterAccess())) {
             for (String pod : resolvePods(client, req.namespace(), req.pods(), req.selector())) {
                 for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
-                    try (BufferedReader br = logReader(client, req.namespace(), pod, container, req.from(), req.previous(), req.maxBytes())) {
-                        String line;
-                        long containerBytes = 0L;
-                        while ((line = br.readLine()) != null) {
-                            byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
-                            if (maxBytesExceeded(req.maxBytes(), containerBytes, bytes.length)) {
-                                break;
-                            }
-                            containerBytes += bytes.length;
-                            var ts = LogTimeFilter.parseTimestamp(line);
-                            if (ts.isEmpty()) {
-                                unparsed.incrementAndGet();
-                            }
-                            if (!LogTimeFilter.inRange(ts, req.from(), req.to())) {
-                                continue;
-                            }
+                    try {
+                        List<String> lines = collectWindowed(client, req.namespace(), pod, container, req.from(), req.to(), req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                        for (String line : lines) {
                             total.incrementAndGet();
                             if (out.size() < limit) {
                                 out.add(new PreviewResponse.PreviewLine(pod, container, line));
@@ -80,6 +68,7 @@ public class LogStreamingService {
         } catch (Exception e) {
             throw new ApiException(500, "Preview failed: " + e.getMessage());
         }
+
         return new PreviewResponse(out, new PreviewResponse.PreviewStats(total.get(), unparsed.get(), errors.get()));
     }
 
@@ -87,6 +76,7 @@ public class LogStreamingService {
         return outputStream -> {
             AtomicLong unparsed = new AtomicLong();
             List<Map<String, Object>> stats = new ArrayList<>();
+
             try (KubernetesClient client = createClient(req.contour(), req.masterAccess());
                  ZipOutputStream zip = new ZipOutputStream(outputStream)) {
 
@@ -95,19 +85,12 @@ public class LogStreamingService {
                         String path = "logs/" + FileNameSanitizer.sanitize(pod) + "/" + FileNameSanitizer.sanitize(container) + ".log";
                         long written = 0L;
                         zip.putNextEntry(new ZipEntry(path));
-                        try (BufferedReader br = logReader(client, req.namespace(), pod, container, req.from(), req.previous(), req.maxBytes())) {
-                            String line;
-                            while ((line = br.readLine()) != null) {
+                        try {
+                            List<String> lines = collectWindowed(client, req.namespace(), pod, container, req.from(), req.to(), req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                            for (String line : lines) {
                                 byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                                 if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {
                                     break;
-                                }
-                                var ts = LogTimeFilter.parseTimestamp(line);
-                                if (ts.isEmpty()) {
-                                    unparsed.incrementAndGet();
-                                }
-                                if (!LogTimeFilter.inRange(ts, req.from(), req.to())) {
-                                    continue;
                                 }
                                 zip.write(bytes);
                                 written += bytes.length;
@@ -125,6 +108,7 @@ public class LogStreamingService {
                         zip.closeEntry();
                     }
                 }
+
                 zip.putNextEntry(new ZipEntry("metadata.json"));
                 Map<String, Object> metadata = new LinkedHashMap<>();
                 metadata.put("contour", req.contour());
@@ -134,6 +118,7 @@ public class LogStreamingService {
                 metadata.put("workloadName", req.workloadName());
                 metadata.put("from", req.from());
                 metadata.put("to", req.to());
+                metadata.put("pollIntervalSeconds", req.pollIntervalSeconds());
                 metadata.put("pods", req.pods());
                 metadata.put("containers", req.containers());
                 metadata.put("stats", stats);
@@ -143,6 +128,77 @@ public class LogStreamingService {
                 zip.finish();
             }
         };
+    }
+
+    private List<String> collectWindowed(KubernetesClient client,
+                                         String namespace,
+                                         String pod,
+                                         String container,
+                                         Instant from,
+                                         Instant to,
+                                         boolean previous,
+                                         Long maxBytes,
+                                         Integer pollIntervalSeconds,
+                                         AtomicLong unparsedCounter) throws IOException {
+        List<String> result = new ArrayList<>();
+        long emittedBytes = 0L;
+
+        if (from == null || to == null || !from.isBefore(to)) {
+            try (BufferedReader br = logReader(client, namespace, pod, container, from, previous)) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    var ts = LogTimeFilter.parseTimestamp(line);
+                    if (ts.isEmpty()) {
+                        unparsedCounter.incrementAndGet();
+                    }
+                    if (!LogTimeFilter.inRange(ts, from, to)) {
+                        continue;
+                    }
+                    byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                    if (maxBytesExceeded(maxBytes, emittedBytes, bytes.length)) {
+                        break;
+                    }
+                    emittedBytes += bytes.length;
+                    result.add(line);
+                }
+            }
+            return result;
+        }
+
+        int sec = pollIntervalSeconds == null || pollIntervalSeconds <= 0 ? 30 : pollIntervalSeconds;
+        Duration chunk = Duration.ofSeconds(sec);
+        Instant cursor = from;
+
+        while (cursor.isBefore(to)) {
+            Instant windowEnd = cursor.plus(chunk);
+            if (windowEnd.isAfter(to)) {
+                windowEnd = to;
+            }
+
+            try (BufferedReader br = logReader(client, namespace, pod, container, cursor, previous)) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    var ts = LogTimeFilter.parseTimestamp(line);
+                    if (ts.isEmpty()) {
+                        unparsedCounter.incrementAndGet();
+                        continue;
+                    }
+                    Instant parsed = ts.get();
+                    if (parsed.isBefore(cursor) || parsed.isAfter(windowEnd)) {
+                        continue;
+                    }
+                    byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                    if (maxBytesExceeded(maxBytes, emittedBytes, bytes.length)) {
+                        return result;
+                    }
+                    emittedBytes += bytes.length;
+                    result.add(line);
+                }
+            }
+            cursor = windowEnd.plusMillis(1);
+        }
+
+        return result;
     }
 
     private KubernetesClient createClient(String contour, boolean master) {
@@ -161,9 +217,10 @@ public class LogStreamingService {
                     .getItems()
                     .stream()
                     .map(p -> p.getMetadata().getName())
+                    .sorted()
                     .toList();
         }
-        return client.pods().inNamespace(namespace).list().getItems().stream().map(p -> p.getMetadata().getName()).toList();
+        return client.pods().inNamespace(namespace).list().getItems().stream().map(p -> p.getMetadata().getName()).sorted().toList();
     }
 
     private List<String> resolveContainers(KubernetesClient client, String namespace, String pod, List<String> containers) {
@@ -171,14 +228,24 @@ public class LogStreamingService {
             return containers;
         }
         var resource = client.pods().inNamespace(namespace).withName(pod).get();
-        if (resource == null || resource.getSpec() == null || resource.getSpec().getContainers() == null) {
+        if (resource == null || resource.getSpec() == null) {
             return List.of();
         }
-        return resource.getSpec().getContainers().stream().map(c -> c.getName()).toList();
+        List<String> names = new ArrayList<>();
+        if (resource.getSpec().getContainers() != null) {
+            names.addAll(resource.getSpec().getContainers().stream().map(c -> c.getName()).toList());
+        }
+        if (resource.getSpec().getInitContainers() != null) {
+            names.addAll(resource.getSpec().getInitContainers().stream().map(c -> c.getName()).toList());
+        }
+        if (resource.getSpec().getEphemeralContainers() != null) {
+            names.addAll(resource.getSpec().getEphemeralContainers().stream().map(c -> c.getName()).toList());
+        }
+        return names.stream().distinct().sorted().toList();
     }
 
     private BufferedReader logReader(KubernetesClient client, String namespace, String pod, String container,
-                                     Instant from, boolean previous, Long maxBytes) {
+                                     Instant from, boolean previous) {
         var base = client.pods().inNamespace(namespace).withName(pod).inContainer(container);
         Reader reader;
 

@@ -28,10 +28,14 @@ public class K8sController {
     }
 
     @GetMapping("/contours")
-    public List<String> contours() { return queryService.contours(); }
+    public List<String> contours() {
+        return queryService.contours();
+    }
 
     @GetMapping("/namespaces")
-    public List<String> namespaces(@RequestParam(required = false) String contour) { return queryService.namespaces(contour); }
+    public List<String> namespaces(@RequestParam(required = false) String contour) {
+        return queryService.namespaces(contour);
+    }
 
     @GetMapping("/workloads")
     public List<String> workloads(@RequestParam(required = false) String contour,
@@ -52,6 +56,14 @@ public class K8sController {
                                    @RequestParam(required = false) String contour,
                                    @RequestParam String namespace) {
         return queryService.containers(contour, namespace, pod);
+    }
+
+    @GetMapping("/containers")
+    public List<String> containersForSelection(@RequestParam(required = false) String contour,
+                                               @RequestParam String namespace,
+                                               @RequestParam(required = false) List<String> pods,
+                                               @RequestParam(required = false) String selector) {
+        return queryService.containersForPods(contour, namespace, pods, selector);
     }
 
     @PostMapping("/logs/preview")

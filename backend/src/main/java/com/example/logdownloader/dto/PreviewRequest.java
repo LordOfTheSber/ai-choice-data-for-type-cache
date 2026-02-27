@@ -17,6 +17,7 @@ public record PreviewRequest(
         boolean previous,
         Long maxBytes,
         boolean bestEffort,
+        Integer pollIntervalSeconds,
         boolean masterAccess
 ) {
 }

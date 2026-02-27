@@ -18,6 +18,7 @@ public record DownloadRequest(
         boolean previous,
         Long maxBytes,
         boolean bestEffort,
+        Integer pollIntervalSeconds,
         boolean masterAccess
 ) {
 }
