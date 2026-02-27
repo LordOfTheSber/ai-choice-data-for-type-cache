@@ -28,6 +28,16 @@ const defaultPrefs: UiPreferences = {
   selectedContainers: []
 }
 
+const asStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.filter((v): v is string => typeof v === 'string')
+  }
+  if (typeof value === 'string') {
+    return value.split(',').map(v => v.trim()).filter(Boolean)
+  }
+  return []
+}
+
 export function App() {
   const [contours, setContours] = useState<string[]>([])
   const [contour, setContour] = useState('')
@@ -48,21 +58,23 @@ export function App() {
   const [loading, setLoading] = useState(false)
   const [saved, setSaved] = useState('')
 
-  useEffect(() => { fetch('/api/v1/contours').then(r => r.json()).then(setContours) }, [])
+  useEffect(() => {
+    fetch('/api/v1/contours').then(r => r.json()).then((v) => setContours(asStringArray(v))).catch(() => setContours([]))
+  }, [])
 
   useEffect(() => {
-    fetch('/api/v1/preferences').then(r => r.json()).then((p: UiPreferences) => {
+    fetch('/api/v1/preferences').then(r => r.json()).then((p: Partial<UiPreferences>) => {
       const pref = { ...defaultPrefs, ...p }
       setContour(pref.contour || '')
-      setNamespace(pref.namespace)
-      setSelector(pref.selector)
+      setNamespace(pref.namespace || 'default')
+      setSelector(pref.selector || '')
       setFrom(pref.from || '')
       setTo(pref.to || '')
       setPrevious(!!pref.previous)
       setMasterAccess(!!pref.masterAccess)
       setMaxBytes(pref.maxBytes ?? '')
-      setSelectedPods(pref.selectedPods || [])
-      setSelectedContainers(pref.selectedContainers || [])
+      setSelectedPods(asStringArray(pref.selectedPods))
+      setSelectedContainers(asStringArray(pref.selectedContainers))
     }).catch(() => null)
   }, [])
 
@@ -87,33 +99,43 @@ export function App() {
   const loadPods = async () => {
     const params = new URLSearchParams({ contour, namespace })
     if (selector) params.set('selector', selector)
-    const podList = await fetch(`/api/v1/pods?${params}`).then(r => r.json())
+    const podResponse = await fetch(`/api/v1/pods?${params}`).then(r => r.json())
+    const podList = asStringArray(podResponse)
     setPods(podList)
-    const selected = selectedPods.length ? selectedPods.filter(p => podList.includes(p)) : podList
+    const currentSelected = asStringArray(selectedPods)
+    const selected = currentSelected.length ? currentSelected.filter(p => podList.includes(p)) : podList
     setSelectedPods(selected)
     await loadContainers(selected)
   }
 
-  const loadContainers = async (podsForReq: string[]) => {
+  const loadContainers = async (podsForReq: unknown) => {
+    const normalizedPods = asStringArray(podsForReq)
     const params = new URLSearchParams({ contour, namespace })
     if (selector) params.set('selector', selector)
-    podsForReq.forEach(p => params.append('pods', p))
-    const containerList = await fetch(`/api/v1/containers?${params}`).then(r => r.json())
+    normalizedPods.forEach(p => params.append('pods', p))
+    const containerResponse = await fetch(`/api/v1/containers?${params}`).then(r => r.json())
+    const containerList = asStringArray(containerResponse)
     setContainers(containerList)
-    if (!selectedContainers.length) setSelectedContainers(containerList)
+    const prevSelected = asStringArray(selectedContainers)
+    if (!prevSelected.length) {
+      setSelectedContainers(containerList)
+    } else {
+      setSelectedContainers(prevSelected.filter(c => containerList.includes(c)))
+    }
   }
 
   useEffect(() => {
-    if (pods.length) loadContainers(selectedPods)
+    const normalizedSelectedPods = asStringArray(selectedPods)
+    if (pods.length) loadContainers(normalizedSelectedPods)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPods.join('|')])
+  }, [asStringArray(selectedPods).join('|')])
 
   const requestBody = useMemo(() => ({
     contour,
     namespace,
     selector,
-    pods: selectedPods,
-    containers: selectedContainers,
+    pods: asStringArray(selectedPods),
+    containers: asStringArray(selectedContainers),
     from: from || null,
     to: to || null,
     previous,
@@ -173,12 +195,12 @@ export function App() {
       </div>
       <div className="selectors">
         <label>Pods
-          <select multiple value={selectedPods} onChange={e => setSelectedPods(Array.from(e.target.selectedOptions).map(o => o.value))}>
+          <select multiple value={asStringArray(selectedPods)} onChange={e => setSelectedPods(Array.from(e.target.selectedOptions).map(o => o.value))}>
             {pods.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </label>
         <label>Containers
-          <select multiple value={selectedContainers} onChange={e => setSelectedContainers(Array.from(e.target.selectedOptions).map(o => o.value))}>
+          <select multiple value={asStringArray(selectedContainers)} onChange={e => setSelectedContainers(Array.from(e.target.selectedOptions).map(o => o.value))}>
             {containers.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
         </label>
