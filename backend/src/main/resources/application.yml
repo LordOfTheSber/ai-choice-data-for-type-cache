@@ -17,3 +17,8 @@ app:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+logging:
+  level:
+    root: INFO
+    com.example.logdownloader: DEBUG

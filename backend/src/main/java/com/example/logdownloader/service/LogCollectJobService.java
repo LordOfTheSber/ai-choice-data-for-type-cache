@@ -4,6 +4,8 @@ import com.example.logdownloader.dto.DownloadRequest;
 import com.example.logdownloader.dto.LogCollectStartResponse;
 import com.example.logdownloader.dto.LogCollectStatusResponse;
 import com.example.logdownloader.error.ApiException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -15,10 +17,14 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 public class LogCollectJobService {
+
+    private static final Logger log = LoggerFactory.getLogger(LogCollectJobService.class);
 
     private final LogStreamingService logStreamingService;
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -33,6 +39,7 @@ public class LogCollectJobService {
         Path out = Path.of("data", "jobs", id + ".zip");
         JobState state = new JobState(id, "RUNNING", "Started", out, Instant.now(), null);
         jobs.put(id, state);
+        log.info("Start collect job id={} output={}", id, out);
 
         executor.submit(() -> runJob(id, request));
         return new LogCollectStartResponse(id, "RUNNING");
@@ -69,10 +76,24 @@ public class LogCollectJobService {
             StreamingResponseBody body = logStreamingService.download(request);
             try (FileOutputStream fos = new FileOutputStream(curr.output().toFile())) {
                 body.writeTo(fos);
+                fos.flush();
             }
             jobs.put(id, curr.withStatus("DONE", "Completed", null));
+            log.info("Collect job DONE id={} output={}", id, curr.output());
         } catch (Exception e) {
-            jobs.put(id, curr.withStatus("FAILED", e.getMessage(), e));
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            long size = 0L;
+            try {
+                if (Files.exists(curr.output())) size = Files.size(curr.output());
+            } catch (IOException ignored) {
+            }
+            if (msg.toLowerCase().contains("stream closed") && size > 0) {
+                jobs.put(id, curr.withStatus("DONE", "Completed with warning: stream closed after writing partial archive", null));
+                log.warn("Collect job recovered as DONE id={} warning='{}' size={}", id, msg, size, e);
+                return;
+            }
+            jobs.put(id, curr.withStatus("FAILED", msg, e));
+            log.error("Collect job FAILED id={} message={} size={}", id, msg, size, e);
         }
     }
 

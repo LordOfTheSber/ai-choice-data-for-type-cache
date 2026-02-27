@@ -35,6 +35,8 @@ npm run dev
 ```
 
 ## What changed
+- Backend debugging logs: HTTP request/response bodies, status and exception traces are logged; service logs include async job lifecycle.
+- Async collect job now tolerates late `Stream closed` after partial archive write by finalizing job as DONE with warning when ZIP exists.
 - Пользовательский сценарий: contour-шаблон (например `sb_mg`) -> namespace -> pods/containers -> период времени (MSK) -> backend опрашивает логи через заданный период до конечного времени и один раз за его предел -> снапшоты склеиваются по совпадению последней строки; если совпадения нет, вставляется маркер `=====NO_OVERLAP_BOUNDARY=====`.
 - UI state (namespace/selector/pods/containers/time range/options) is persisted to file-backed storage via backend endpoint `PUT/GET /api/v1/preferences` (`backend/data/ui-preferences.json` at runtime).
 - Pods/containers listing is cached on frontend in Redux store for faster repeated selection flows.
