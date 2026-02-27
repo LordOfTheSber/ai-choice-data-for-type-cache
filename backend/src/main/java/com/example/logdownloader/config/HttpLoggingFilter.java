@@ -23,6 +23,15 @@ public class HttpLoggingFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+
+        if (isBinaryStreamingEndpoint(request)) {
+            long start = System.currentTimeMillis();
+            filterChain.doFilter(request, response);
+            long took = System.currentTimeMillis() - start;
+            log.info("HTTP {} {} status={} tookMs={} binaryStream=true", request.getMethod(), request.getRequestURI(), response.getStatus(), took);
+            return;
+        }
+
         ContentCachingRequestWrapper req = new ContentCachingRequestWrapper(request);
         ContentCachingResponseWrapper res = new ContentCachingResponseWrapper(response);
 
@@ -37,6 +46,11 @@ public class HttpLoggingFilter extends OncePerRequestFilter {
                     request.getMethod(), request.getRequestURI(), res.getStatus(), took, reqBody, resBody);
             res.copyBodyToResponse();
         }
+    }
+
+    private boolean isBinaryStreamingEndpoint(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return uri.equals("/api/v1/logs/download") || (uri.contains("/api/v1/logs/collect/") && uri.endsWith("/download"));
     }
 
     private String body(byte[] bytes) {
