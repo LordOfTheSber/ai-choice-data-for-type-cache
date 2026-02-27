@@ -213,14 +213,40 @@ public class LogStreamingService {
         Duration period = Duration.ofSeconds(sec);
         Instant hardLimit = waitForSchedule ? to : to.plus(period);
 
+        if (waitForSchedule) {
+            List<String> collected = new ArrayList<>();
+            Instant pollTick = from;
+            Instant sinceCursor = from;
+
+            while (!pollTick.isAfter(hardLimit)) {
+                waitUntil(pollTick);
+
+                List<String> snapshot = readSnapshotFiltered(
+                        client,
+                        namespace,
+                        pod,
+                        container,
+                        sinceCursor,
+                        pollTick,
+                        previous,
+                        maxBytes,
+                        unparsedCounter,
+                        from,
+                        to
+                );
+                appendSnapshotWithoutBoundaryDuplicates(collected, snapshot);
+
+                sinceCursor = pollTick;
+                pollTick = pollTick.plus(period);
+            }
+            return collected;
+        }
+
         List<String> stitched = new ArrayList<>();
         Instant cursor = from;
         boolean first = true;
 
         while (!cursor.isAfter(hardLimit)) {
-            if (waitForSchedule) {
-                waitUntil(cursor);
-            }
             Instant windowEnd = cursor.plus(period);
             if (windowEnd.isAfter(hardLimit)) {
                 windowEnd = hardLimit;
@@ -243,8 +269,6 @@ public class LogStreamingService {
             if (first) {
                 stitched.addAll(snapshot);
                 first = false;
-            } else if (waitForSchedule) {
-                stitched.addAll(snapshot);
             } else {
                 stitchSnapshots(stitched, snapshot);
             }
@@ -315,6 +339,24 @@ public class LogStreamingService {
 
         base.add(NO_OVERLAP_MARKER);
         base.addAll(next);
+    }
+
+    private void appendSnapshotWithoutBoundaryDuplicates(List<String> base, List<String> next) {
+        if (next.isEmpty()) {
+            return;
+        }
+        if (base.isEmpty()) {
+            base.addAll(next);
+            return;
+        }
+
+        int startIndex = 0;
+        while (startIndex < next.size() && base.get(base.size() - 1).equals(next.get(startIndex))) {
+            startIndex++;
+        }
+        if (startIndex < next.size()) {
+            base.addAll(next.subList(startIndex, next.size()));
+        }
     }
 
     private void waitUntil(Instant target) {
