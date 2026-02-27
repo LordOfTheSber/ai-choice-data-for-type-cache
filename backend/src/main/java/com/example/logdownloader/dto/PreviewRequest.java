@@ -2,7 +2,6 @@ package com.example.logdownloader.dto;
 
 import jakarta.validation.constraints.NotBlank;
 
-import java.time.Instant;
 import java.util.List;
 
 public record PreviewRequest(
@@ -11,8 +10,8 @@ public record PreviewRequest(
         List<String> pods,
         List<String> containers,
         String selector,
-        Instant from,
-        Instant to,
+        String from,
+        String to,
         Integer lines,
         boolean previous,
         Long maxBytes,

@@ -2,7 +2,7 @@
 
 ## Structure
 - `backend` — Spring Boot 3 / Java 21 / Fabric8 Kubernetes Client
-- `frontend` — Vite + React + TypeScript (modernized UI/UX)
+- `frontend` — Vite + React + TypeScript (modernized UI/UX + Redux cache)
 
 ## Connection semantics (ported as-is)
 - `K8sClientFactory.createClient(contour)` → `testsK8sUrl + testsK8sToken`
@@ -36,6 +36,8 @@ npm run dev
 
 ## What changed
 - UI state (namespace/selector/pods/containers/time range/options) is persisted to file-backed storage via backend endpoint `PUT/GET /api/v1/preferences` (`backend/data/ui-preferences.json` at runtime).
+- Pods/containers listing is cached on frontend in Redux store for faster repeated selection flows.
+- DateTimePicker uses Moscow time and backend parses Moscow-local values to match log lines like `2026-02-26 17:10:12,447`.
 - Time-window log reading supports periodic chunking (`pollIntervalSeconds`) from `from` (x) to `to` (y) with stitching.
 - Container discovery includes regular + init + ephemeral containers. Added `GET /api/v1/containers` for complete container list for selected pods/selector.
 

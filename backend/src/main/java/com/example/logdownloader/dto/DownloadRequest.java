@@ -2,7 +2,6 @@ package com.example.logdownloader.dto;
 
 import jakarta.validation.constraints.NotBlank;
 
-import java.time.Instant;
 import java.util.List;
 
 public record DownloadRequest(
@@ -13,8 +12,8 @@ public record DownloadRequest(
         String selector,
         String workloadKind,
         String workloadName,
-        Instant from,
-        Instant to,
+        String from,
+        String to,
         boolean previous,
         Long maxBytes,
         boolean bestEffort,

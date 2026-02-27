@@ -46,11 +46,14 @@ public class LogStreamingService {
         AtomicLong errors = new AtomicLong();
         AtomicLong total = new AtomicLong();
 
+        Instant from = LogTimeFilter.parseUserDateTime(req.from());
+        Instant to = LogTimeFilter.parseUserDateTime(req.to());
+
         try (KubernetesClient client = createClient(req.contour(), req.masterAccess())) {
             for (String pod : resolvePods(client, req.namespace(), req.pods(), req.selector())) {
                 for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
                     try {
-                        List<String> lines = collectWindowed(client, req.namespace(), pod, container, req.from(), req.to(), req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                        List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to, req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
                         for (String line : lines) {
                             total.incrementAndGet();
                             if (out.size() < limit) {
@@ -77,6 +80,9 @@ public class LogStreamingService {
             AtomicLong unparsed = new AtomicLong();
             List<Map<String, Object>> stats = new ArrayList<>();
 
+            Instant from = LogTimeFilter.parseUserDateTime(req.from());
+            Instant to = LogTimeFilter.parseUserDateTime(req.to());
+
             try (KubernetesClient client = createClient(req.contour(), req.masterAccess());
                  ZipOutputStream zip = new ZipOutputStream(outputStream)) {
 
@@ -86,7 +92,7 @@ public class LogStreamingService {
                         long written = 0L;
                         zip.putNextEntry(new ZipEntry(path));
                         try {
-                            List<String> lines = collectWindowed(client, req.namespace(), pod, container, req.from(), req.to(), req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                            List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to, req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
                             for (String line : lines) {
                                 byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                                 if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {

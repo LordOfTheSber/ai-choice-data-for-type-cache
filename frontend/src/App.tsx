@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
+import type { RootState } from './store'
+import { setContainersCache, setPodsCache } from './store'
 
 type PreviewLine = { pod: string, container: string, line: string }
 type PreviewResponse = { lines: PreviewLine[], stats: { totalLines: number, unparsedTimestampCount: number, errors: number } }
@@ -29,16 +32,16 @@ const defaultPrefs: UiPreferences = {
 }
 
 const asStringArray = (value: unknown): string[] => {
-  if (Array.isArray(value)) {
-    return value.filter((v): v is string => typeof v === 'string')
-  }
-  if (typeof value === 'string') {
-    return value.split(',').map(v => v.trim()).filter(Boolean)
-  }
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string')
+  if (typeof value === 'string') return value.split(',').map(v => v.trim()).filter(Boolean)
   return []
 }
 
 export function App() {
+  const dispatch = useDispatch()
+  const podsCache = useSelector((s: RootState) => s.cache.pods)
+  const containersCache = useSelector((s: RootState) => s.cache.containers)
+
   const [contours, setContours] = useState<string[]>([])
   const [contour, setContour] = useState('')
   const [namespace, setNamespace] = useState('default')
@@ -96,11 +99,18 @@ export function App() {
     setTimeout(() => setSaved(''), 1200)
   }
 
+  const podsCacheKey = `${contour}|${namespace}|${selector}`
+
   const loadPods = async () => {
-    const params = new URLSearchParams({ contour, namespace })
-    if (selector) params.set('selector', selector)
-    const podResponse = await fetch(`/api/v1/pods?${params}`).then(r => r.json())
-    const podList = asStringArray(podResponse)
+    let podList = podsCache[podsCacheKey]
+    if (!podList) {
+      const params = new URLSearchParams({ contour, namespace })
+      if (selector) params.set('selector', selector)
+      const podResponse = await fetch(`/api/v1/pods?${params}`).then(r => r.json())
+      podList = asStringArray(podResponse)
+      dispatch(setPodsCache({ key: podsCacheKey, items: podList }))
+    }
+
     setPods(podList)
     const currentSelected = asStringArray(selectedPods)
     const selected = currentSelected.length ? currentSelected.filter(p => podList.includes(p)) : podList
@@ -110,23 +120,26 @@ export function App() {
 
   const loadContainers = async (podsForReq: unknown) => {
     const normalizedPods = asStringArray(podsForReq)
-    const params = new URLSearchParams({ contour, namespace })
-    if (selector) params.set('selector', selector)
-    normalizedPods.forEach(p => params.append('pods', p))
-    const containerResponse = await fetch(`/api/v1/containers?${params}`).then(r => r.json())
-    const containerList = asStringArray(containerResponse)
+    const containerCacheKey = `${contour}|${namespace}|${selector}|${normalizedPods.slice().sort().join(',')}`
+
+    let containerList = containersCache[containerCacheKey]
+    if (!containerList) {
+      const params = new URLSearchParams({ contour, namespace })
+      if (selector) params.set('selector', selector)
+      normalizedPods.forEach(p => params.append('pods', p))
+      const containerResponse = await fetch(`/api/v1/containers?${params}`).then(r => r.json())
+      containerList = asStringArray(containerResponse)
+      dispatch(setContainersCache({ key: containerCacheKey, items: containerList }))
+    }
+
     setContainers(containerList)
     const prevSelected = asStringArray(selectedContainers)
-    if (!prevSelected.length) {
-      setSelectedContainers(containerList)
-    } else {
-      setSelectedContainers(prevSelected.filter(c => containerList.includes(c)))
-    }
+    if (!prevSelected.length) setSelectedContainers(containerList)
+    else setSelectedContainers(prevSelected.filter(c => containerList.includes(c)))
   }
 
   useEffect(() => {
-    const normalizedSelectedPods = asStringArray(selectedPods)
-    if (pods.length) loadContainers(normalizedSelectedPods)
+    if (pods.length) loadContainers(asStringArray(selectedPods))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asStringArray(selectedPods).join('|')])
 
@@ -178,13 +191,14 @@ export function App() {
         <button className="ghost" onClick={savePreferences}>Сохранить настройки</button>
       </div>
       {saved && <div className="ok">{saved}</div>}
+      <div className="hint">Период выбирается по московскому времени (как в логах: yyyy-MM-dd HH:mm:ss,SSS).</div>
       <div className="grid">
         <label>Contour<input value={contour} onChange={e => setContour(e.target.value)} list="contours" placeholder="contour-a" /></label>
         <datalist id="contours">{contours.map(c => <option key={c} value={c} />)}</datalist>
         <label>Namespace<input value={namespace} onChange={e => setNamespace(e.target.value)} /></label>
         <label>Selector<input value={selector} onChange={e => setSelector(e.target.value)} placeholder="app=my-service" /></label>
-        <label>From (ISO-8601)<input value={from} onChange={e => setFrom(e.target.value)} placeholder="2025-01-01T10:00:00Z" /></label>
-        <label>To (ISO-8601)<input value={to} onChange={e => setTo(e.target.value)} placeholder="2025-01-01T11:00:00Z" /></label>
+        <label>From (MSK)<input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} /></label>
+        <label>To (MSK)<input type="datetime-local" value={to} onChange={e => setTo(e.target.value)} /></label>
         <label>Poll interval, sec<input type="number" value={pollIntervalSeconds} onChange={e => setPollIntervalSeconds(Number(e.target.value || 30))} /></label>
         <label>Max bytes<input type="number" value={maxBytes} onChange={e => setMaxBytes(e.target.value ? Number(e.target.value) : '')} /></label>
       </div>
