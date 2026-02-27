@@ -56,7 +56,7 @@ public class LogStreamingService {
                 for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
                     try {
                         List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
-                                req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                                req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed, false);
                         for (String line : lines) {
                             total.incrementAndGet();
                             if (out.size() < limit) {
@@ -79,6 +79,14 @@ public class LogStreamingService {
     }
 
     public StreamingResponseBody download(DownloadRequest req) {
+        return buildDownload(req, false);
+    }
+
+    public StreamingResponseBody downloadForCollect(DownloadRequest req) {
+        return buildDownload(req, true);
+    }
+
+    private StreamingResponseBody buildDownload(DownloadRequest req, boolean waitForSchedule) {
         return outputStream -> {
             AtomicLong unparsed = new AtomicLong();
             List<Map<String, Object>> stats = new ArrayList<>();
@@ -96,7 +104,7 @@ public class LogStreamingService {
                         zip.putNextEntry(new ZipEntry(path));
                         try {
                             List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
-                                    req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                                    req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed, waitForSchedule);
                             for (String line : lines) {
                                 byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                                 if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {
@@ -150,7 +158,8 @@ public class LogStreamingService {
                                          boolean previous,
                                          Long maxBytes,
                                          Integer pollIntervalSeconds,
-                                         AtomicLong unparsedCounter) throws IOException {
+                                         AtomicLong unparsedCounter,
+                                         boolean waitForSchedule) throws IOException {
         if (from == null || to == null || !from.isBefore(to)) {
             return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
         }
@@ -164,18 +173,27 @@ public class LogStreamingService {
         boolean first = true;
 
         while (!cursor.isAfter(hardLimit)) {
+            if (waitForSchedule) {
+                waitUntil(cursor);
+            }
+
+            Instant windowEnd = cursor.plus(period);
+            if (windowEnd.isAfter(to)) {
+                windowEnd = to;
+            }
+
             List<String> snapshot = readSnapshotFiltered(
                     client,
                     namespace,
                     pod,
                     container,
                     cursor,
-                    hardLimit,
+                    windowEnd,
                     previous,
                     maxBytes,
                     unparsedCounter,
                     from,
-                    hardLimit
+                    to
             );
 
             if (first) {
@@ -251,6 +269,18 @@ public class LogStreamingService {
 
         base.add(NO_OVERLAP_MARKER);
         base.addAll(next);
+    }
+
+    private void waitUntil(Instant target) {
+        long ms = target.toEpochMilli() - System.currentTimeMillis();
+        if (ms <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private KubernetesClient createClient(String contour, boolean master) {

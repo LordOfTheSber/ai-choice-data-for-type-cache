@@ -73,7 +73,7 @@ public class LogCollectJobService {
         JobState curr = jobs.get(id);
         try {
             Files.createDirectories(curr.output().getParent());
-            StreamingResponseBody body = logStreamingService.download(request);
+            StreamingResponseBody body = logStreamingService.downloadForCollect(request);
             try (FileOutputStream fos = new FileOutputStream(curr.output().toFile())) {
                 body.writeTo(fos);
                 fos.flush();

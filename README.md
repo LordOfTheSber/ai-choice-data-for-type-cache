@@ -35,6 +35,7 @@ npm run dev
 ```
 
 ## What changed
+- Async collect job follows schedule in real time: it polls container logs every UI period from `from` up to `to`, then finalizes and only after that returns `DONE`.
 - ZIP generation fixed: metadata is written without closing target `ZipOutputStream`, preventing corrupted archives and `Stream closed` on finalize.
 - Backend debugging logs: HTTP request/response bodies, status and exception traces are logged; service logs include async job lifecycle.
 - Async collect job now tolerates late `Stream closed` after partial archive write by finalizing job as DONE with warning when ZIP exists.
