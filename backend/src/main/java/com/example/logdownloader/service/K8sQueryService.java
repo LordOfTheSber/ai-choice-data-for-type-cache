@@ -46,11 +46,27 @@ public class K8sQueryService {
 
     public List<String> pods(String contour, String namespace, String selector) {
         try (KubernetesClient client = factory.createClient(contour)) {
-            var op = client.pods().inNamespace(namespace);
             if (StringUtils.hasText(selector)) {
-                op = op.withLabels(LabelSelectorParser.parseEqualsSelector(selector));
+                return client.pods()
+                        .inNamespace(namespace)
+                        .withLabels(LabelSelectorParser.parseEqualsSelector(selector))
+                        .list()
+                        .getItems()
+                        .stream()
+                        .map(Pod::getMetadata)
+                        .map(m -> m.getName())
+                        .sorted()
+                        .toList();
             }
-            return op.list().getItems().stream().map(Pod::getMetadata).map(m -> m.getName()).sorted().toList();
+            return client.pods()
+                    .inNamespace(namespace)
+                    .list()
+                    .getItems()
+                    .stream()
+                    .map(Pod::getMetadata)
+                    .map(m -> m.getName())
+                    .sorted()
+                    .toList();
         }
     }
 

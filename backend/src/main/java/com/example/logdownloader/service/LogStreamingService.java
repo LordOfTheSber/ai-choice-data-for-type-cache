@@ -50,7 +50,13 @@ public class LogStreamingService {
                 for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
                     try (BufferedReader br = logReader(client, req.namespace(), pod, container, req.from(), req.previous(), req.maxBytes())) {
                         String line;
+                        long containerBytes = 0L;
                         while ((line = br.readLine()) != null) {
+                            byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                            if (maxBytesExceeded(req.maxBytes(), containerBytes, bytes.length)) {
+                                break;
+                            }
+                            containerBytes += bytes.length;
                             var ts = LogTimeFilter.parseTimestamp(line);
                             if (ts.isEmpty()) {
                                 unparsed.incrementAndGet();
@@ -92,6 +98,10 @@ public class LogStreamingService {
                         try (BufferedReader br = logReader(client, req.namespace(), pod, container, req.from(), req.previous(), req.maxBytes())) {
                             String line;
                             while ((line = br.readLine()) != null) {
+                                byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                                if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {
+                                    break;
+                                }
                                 var ts = LogTimeFilter.parseTimestamp(line);
                                 if (ts.isEmpty()) {
                                     unparsed.incrementAndGet();
@@ -99,7 +109,6 @@ public class LogStreamingService {
                                 if (!LogTimeFilter.inRange(ts, req.from(), req.to())) {
                                     continue;
                                 }
-                                byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                                 zip.write(bytes);
                                 written += bytes.length;
                             }
@@ -144,11 +153,17 @@ public class LogStreamingService {
         if (pods != null && !pods.isEmpty()) {
             return pods;
         }
-        var op = client.pods().inNamespace(namespace);
         if (StringUtils.hasText(selector)) {
-            op = op.withLabels(LabelSelectorParser.parseEqualsSelector(selector));
+            return client.pods()
+                    .inNamespace(namespace)
+                    .withLabels(LabelSelectorParser.parseEqualsSelector(selector))
+                    .list()
+                    .getItems()
+                    .stream()
+                    .map(p -> p.getMetadata().getName())
+                    .toList();
         }
-        return op.list().getItems().stream().map(p -> p.getMetadata().getName()).toList();
+        return client.pods().inNamespace(namespace).list().getItems().stream().map(p -> p.getMetadata().getName()).toList();
     }
 
     private List<String> resolveContainers(KubernetesClient client, String namespace, String pod, List<String> containers) {
@@ -166,31 +181,26 @@ public class LogStreamingService {
                                      Instant from, boolean previous, Long maxBytes) {
         var base = client.pods().inNamespace(namespace).withName(pod).inContainer(container);
         Reader reader;
-        boolean limit = maxBytes != null && maxBytes > 0;
 
         if (previous) {
-            if (from != null && limit) {
-                reader = base.terminated().sinceTime(from.toString()).limitBytes(Math.toIntExact(maxBytes)).getLogReader();
-            } else if (from != null) {
+            if (from != null) {
                 reader = base.terminated().sinceTime(from.toString()).getLogReader();
-            } else if (limit) {
-                reader = base.terminated().limitBytes(Math.toIntExact(maxBytes)).getLogReader();
             } else {
                 reader = base.terminated().getLogReader();
             }
         } else {
-            if (from != null && limit) {
-                reader = base.sinceTime(from.toString()).limitBytes(Math.toIntExact(maxBytes)).getLogReader();
-            } else if (from != null) {
+            if (from != null) {
                 reader = base.sinceTime(from.toString()).getLogReader();
-            } else if (limit) {
-                reader = base.limitBytes(Math.toIntExact(maxBytes)).getLogReader();
             } else {
                 reader = base.getLogReader();
             }
         }
 
         return new BufferedReader(reader);
+    }
+
+    private boolean maxBytesExceeded(Long maxBytes, long alreadyWritten, int nextLineBytes) {
+        return maxBytes != null && maxBytes > 0 && alreadyWritten + nextLineBytes > maxBytes;
     }
 
     private void writeError(ZipOutputStream zip, String pod, String error) throws IOException {
