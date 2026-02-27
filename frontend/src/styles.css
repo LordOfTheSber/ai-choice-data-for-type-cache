@@ -1,0 +1,6 @@
+body { font-family: Arial, sans-serif; margin: 0; }
+.container { padding: 16px; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 10px; }
+select[multiple] { min-height: 120px; }
+.error { color: #b00020; white-space: pre-wrap; }
+pre { background: #f3f3f3; padding: 8px; max-height: 400px; overflow: auto; }
