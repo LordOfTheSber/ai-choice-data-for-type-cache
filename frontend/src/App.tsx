@@ -17,6 +17,7 @@ type UiPreferences = {
   selectedPods: string[] | null
   selectedContainers: string[] | null
 }
+type CollectStatus = { jobId: string, status: 'RUNNING' | 'DONE' | 'FAILED' | string, message: string, sizeBytes: number }
 
 const defaultPrefs: UiPreferences = {
   contour: null,
@@ -61,6 +62,9 @@ export function App() {
   const [loading, setLoading] = useState(false)
   const [saved, setSaved] = useState('')
 
+  const [collectJobId, setCollectJobId] = useState<string | null>(null)
+  const [collectStatus, setCollectStatus] = useState<CollectStatus | null>(null)
+
   useEffect(() => {
     fetch('/api/v1/contours').then(r => r.json()).then((v) => setContours(asStringArray(v))).catch(() => setContours([]))
   }, [])
@@ -80,6 +84,21 @@ export function App() {
       setSelectedContainers(asStringArray(pref.selectedContainers))
     }).catch(() => null)
   }, [])
+
+  useEffect(() => {
+    if (!collectJobId) return
+    const every = Math.max(1000, pollIntervalSeconds * 1000)
+    const timer = setInterval(async () => {
+      const resp = await fetch(`/api/v1/logs/collect/${collectJobId}`)
+      if (!resp.ok) return
+      const status: CollectStatus = await resp.json()
+      setCollectStatus(status)
+      if (status.status === 'DONE' || status.status === 'FAILED') {
+        clearInterval(timer)
+      }
+    }, every)
+    return () => clearInterval(timer)
+  }, [collectJobId, pollIntervalSeconds])
 
   const savePreferences = async () => {
     const payload: UiPreferences = {
@@ -168,20 +187,29 @@ export function App() {
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
   }
 
-  const doDownload = async () => {
+  const startCollect = async () => {
     setLoading(true); setError('')
     try {
       await savePreferences()
-      const resp = await fetch('/api/v1/logs/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) })
+      const resp = await fetch('/api/v1/logs/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) })
       if (!resp.ok) throw new Error(await resp.text())
-      const blob = await resp.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'logs.zip'
-      a.click()
-      URL.revokeObjectURL(url)
+      const data = await resp.json()
+      setCollectJobId(data.jobId)
+      setCollectStatus({ jobId: data.jobId, status: data.status, message: 'Started', sizeBytes: 0 })
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
+  }
+
+  const downloadCollected = async () => {
+    if (!collectJobId) return
+    const resp = await fetch(`/api/v1/logs/collect/${collectJobId}/download`)
+    if (!resp.ok) throw new Error(await resp.text())
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `logs-${collectJobId}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   return <main className="page">
@@ -221,8 +249,10 @@ export function App() {
       </div>
       <div className="actions">
         <button onClick={doPreview} disabled={loading}>Preview</button>
-        <button onClick={doDownload} disabled={loading}>Download ZIP</button>
+        <button onClick={startCollect} disabled={loading}>Сбор логов</button>
+        <button onClick={downloadCollected} disabled={!collectStatus || collectStatus.status !== 'DONE'}>Скачать собранные логи</button>
       </div>
+      {collectStatus && <p>Job {collectStatus.jobId}: {collectStatus.status} ({collectStatus.sizeBytes} bytes) {collectStatus.message}</p>}
       {loading && <p>Выполняется...</p>}
       {error && <pre className="error">{error}</pre>}
     </section>

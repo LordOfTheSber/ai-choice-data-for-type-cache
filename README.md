@@ -40,6 +40,7 @@ npm run dev
 - Pods/containers listing is cached on frontend in Redux store for faster repeated selection flows.
 - DateTimePicker uses Moscow time and backend parses Moscow-local values to match log lines like `2026-02-26 17:10:12,447`.
 - Time-window log reading supports periodic chunking (`pollIntervalSeconds`) from `from` (x) to `to` (y) with stitching.
+- Async collection flow for UI button "Сбор логов": `POST /api/v1/logs/collect` -> periodic status poll `GET /api/v1/logs/collect/{jobId}` -> final download `GET /api/v1/logs/collect/{jobId}/download`.
 - Container discovery includes regular + init + ephemeral containers. Added `GET /api/v1/containers` for complete container list for selected pods/selector.
 
 ## API examples
