@@ -4,6 +4,7 @@ import com.example.logdownloader.dto.DownloadRequest;
 import com.example.logdownloader.dto.LogCollectStartResponse;
 import com.example.logdownloader.dto.LogCollectStatusResponse;
 import com.example.logdownloader.error.ApiException;
+import com.example.logdownloader.util.LogTimeFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -37,12 +38,20 @@ public class LogCollectJobService {
     public LogCollectStartResponse start(DownloadRequest request) {
         String id = UUID.randomUUID().toString();
         Path out = Path.of("data", "jobs", id + ".zip");
-        JobState state = new JobState(id, "RUNNING", "Started", out, Instant.now(), null);
+
+        Instant from = null;
+        try {
+            from = LogTimeFilter.parseUserDateTime(request.from());
+        } catch (Exception ignored) {
+        }
+        String initialStatus = (from != null && from.isAfter(Instant.now())) ? "SCHEDULED" : "RUNNING";
+
+        JobState state = new JobState(id, initialStatus, "Started", out, Instant.now(), null);
         jobs.put(id, state);
-        log.info("Start collect job id={} output={}", id, out);
+        log.info("Start collect job id={} output={} status={}", id, out, initialStatus);
 
         executor.submit(() -> runJob(id, request));
-        return new LogCollectStartResponse(id, "RUNNING");
+        return new LogCollectStartResponse(id, initialStatus);
     }
 
     public LogCollectStatusResponse status(String id) {
@@ -73,11 +82,25 @@ public class LogCollectJobService {
         JobState curr = jobs.get(id);
         try {
             Files.createDirectories(curr.output().getParent());
+
+            Instant from = null;
+            try {
+                from = LogTimeFilter.parseUserDateTime(request.from());
+            } catch (Exception ignored) {
+            }
+            if (from != null && from.isAfter(Instant.now())) {
+                jobs.put(id, curr.withStatus("SCHEDULED", "Waiting for start time", null));
+                waitUntil(from);
+            }
+
+            jobs.put(id, curr.withStatus("RUNNING", "Collecting logs", null));
             StreamingResponseBody body = logStreamingService.downloadForCollect(request);
             try (FileOutputStream fos = new FileOutputStream(curr.output().toFile())) {
                 body.writeTo(fos);
                 fos.flush();
             }
+
+            jobs.put(id, curr.withStatus("FINALIZING", "Finalizing archive", null));
             jobs.put(id, curr.withStatus("DONE", "Completed", null));
             log.info("Collect job DONE id={} output={}", id, curr.output());
         } catch (Exception e) {
@@ -94,6 +117,16 @@ public class LogCollectJobService {
             }
             jobs.put(id, curr.withStatus("FAILED", msg, e));
             log.error("Collect job FAILED id={} message={} size={}", id, msg, size, e);
+        }
+    }
+
+    private void waitUntil(Instant target) {
+        long ms = target.toEpochMilli() - System.currentTimeMillis();
+        if (ms <= 0) return;
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

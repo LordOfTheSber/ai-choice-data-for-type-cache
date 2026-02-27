@@ -97,36 +97,69 @@ public class LogStreamingService {
             try (KubernetesClient client = createClient(req.contour(), req.masterAccess());
                  ZipOutputStream zip = new ZipOutputStream(outputStream)) {
 
-                for (String pod : resolvePods(client, req.namespace(), req.pods(), req.selector())) {
-                    for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
-                        String path = "logs/" + FileNameSanitizer.sanitize(pod) + "/" + FileNameSanitizer.sanitize(container) + ".log";
-                        long written = 0L;
-                        zip.putNextEntry(new ZipEntry(path));
-                        try {
-                            List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
-                                    req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed, waitForSchedule);
-                            for (String line : lines) {
-                                byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
-                                if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {
-                                    break;
+                if (waitForSchedule) {
+                    zip.putNextEntry(new ZipEntry("logs_combined.txt"));
+                    long totalWritten = 0L;
+                    for (String pod : resolvePods(client, req.namespace(), req.pods(), req.selector())) {
+                        for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
+                            try {
+                                List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
+                                        req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed, true);
+                                String header = "===== " + pod + "/" + container + " =====\n";
+                                byte[] hb = header.getBytes(StandardCharsets.UTF_8);
+                                if (!maxBytesExceeded(req.maxBytes(), totalWritten, hb.length)) {
+                                    zip.write(hb);
+                                    totalWritten += hb.length;
                                 }
-                                zip.write(bytes);
-                                written += bytes.length;
+                                for (String line : lines) {
+                                    byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                                    if (maxBytesExceeded(req.maxBytes(), totalWritten, bytes.length)) {
+                                        break;
+                                    }
+                                    zip.write(bytes);
+                                    totalWritten += bytes.length;
+                                }
+                                stats.add(Map.of("pod", pod, "container", container, "status", "ok"));
+                            } catch (Exception e) {
+                                stats.add(Map.of("pod", pod, "container", container, "status", "error", "error", e.getMessage()));
+                                if (!req.bestEffort()) {
+                                    throw e;
+                                }
                             }
-                            stats.add(Map.of("pod", pod, "container", container, "bytes", written, "status", "ok"));
-                        } catch (Exception e) {
-                            zip.closeEntry();
-                            writeError(zip, pod, e.getMessage());
-                            stats.add(Map.of("pod", pod, "container", container, "status", "error", "error", e.getMessage()));
-                            if (!req.bestEffort()) {
-                                throw e;
-                            }
-                            continue;
                         }
-                        zip.closeEntry();
+                    }
+                    zip.closeEntry();
+                } else {
+                    for (String pod : resolvePods(client, req.namespace(), req.pods(), req.selector())) {
+                        for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
+                            String path = "logs/" + FileNameSanitizer.sanitize(pod) + "/" + FileNameSanitizer.sanitize(container) + ".log";
+                            long written = 0L;
+                            zip.putNextEntry(new ZipEntry(path));
+                            try {
+                                List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
+                                        req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed, false);
+                                for (String line : lines) {
+                                    byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                                    if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {
+                                        break;
+                                    }
+                                    zip.write(bytes);
+                                    written += bytes.length;
+                                }
+                                stats.add(Map.of("pod", pod, "container", container, "bytes", written, "status", "ok"));
+                            } catch (Exception e) {
+                                zip.closeEntry();
+                                writeError(zip, pod, e.getMessage());
+                                stats.add(Map.of("pod", pod, "container", container, "status", "error", "error", e.getMessage()));
+                                if (!req.bestEffort()) {
+                                    throw e;
+                                }
+                                continue;
+                            }
+                            zip.closeEntry();
+                        }
                     }
                 }
-
                 zip.putNextEntry(new ZipEntry("metadata.json"));
                 Map<String, Object> metadata = new LinkedHashMap<>();
                 metadata.put("contour", req.contour());
@@ -178,16 +211,19 @@ public class LogStreamingService {
 
         int sec = pollIntervalSeconds;
         Duration period = Duration.ofSeconds(sec);
-        Instant hardLimit = to.plus(period); // one allowed read beyond to
+        Instant hardLimit = waitForSchedule ? to : to.plus(period);
 
         List<String> stitched = new ArrayList<>();
         Instant cursor = from;
         boolean first = true;
 
         while (!cursor.isAfter(hardLimit)) {
+            if (waitForSchedule) {
+                waitUntil(cursor);
+            }
             Instant windowEnd = cursor.plus(period);
-            if (windowEnd.isAfter(to)) {
-                windowEnd = to;
+            if (windowEnd.isAfter(hardLimit)) {
+                windowEnd = hardLimit;
             }
 
             List<String> snapshot = readSnapshotFiltered(
@@ -277,6 +313,16 @@ public class LogStreamingService {
 
         base.add(NO_OVERLAP_MARKER);
         base.addAll(next);
+    }
+
+    private void waitUntil(Instant target) {
+        long ms = target.toEpochMilli() - System.currentTimeMillis();
+        if (ms <= 0) return;
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private KubernetesClient createClient(String contour, boolean master) {

@@ -35,7 +35,8 @@ npm run dev
 ```
 
 ## What changed
-- Async collect does not sleep in real wall-clock time for each point; it iterates period points immediately and queries K8s per period writing results to file.
+- Async collect lifecycle statuses: `SCHEDULED` -> `RUNNING` -> `FINALIZING` -> `DONE` (or `FAILED`).
+- For async collect, backend waits until start time and then polls K8s by configured period until end time; resulting archive contains unified `logs_combined.txt`.
 - If period (`pollIntervalSeconds`) is `0` or negative, backend performs a single one-shot log snapshot for the selected interval (no periodic polling).
 - ZIP generation fixed: metadata is written without closing target `ZipOutputStream`, preventing corrupted archives and `Stream closed` on finalize.
 - Backend debugging logs: HTTP request/response bodies, status and exception traces are logged; service logs include async job lifecycle.
