@@ -6,6 +6,7 @@ import com.example.logdownloader.dto.PreviewRequest;
 import com.example.logdownloader.dto.PreviewResponse;
 import com.example.logdownloader.error.ApiException;
 import com.example.logdownloader.util.FileNameSanitizer;
+import com.example.logdownloader.util.LabelSelectorParser;
 import com.example.logdownloader.util.LogTimeFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -13,10 +14,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -46,8 +52,12 @@ public class LogStreamingService {
                         String line;
                         while ((line = br.readLine()) != null) {
                             var ts = LogTimeFilter.parseTimestamp(line);
-                            if (ts.isEmpty()) unparsed.incrementAndGet();
-                            if (!LogTimeFilter.inRange(ts, req.from(), req.to())) continue;
+                            if (ts.isEmpty()) {
+                                unparsed.incrementAndGet();
+                            }
+                            if (!LogTimeFilter.inRange(ts, req.from(), req.to())) {
+                                continue;
+                            }
                             total.incrementAndGet();
                             if (out.size() < limit) {
                                 out.add(new PreviewResponse.PreviewLine(pod, container, line));
@@ -55,7 +65,9 @@ public class LogStreamingService {
                         }
                     } catch (Exception e) {
                         errors.incrementAndGet();
-                        if (!req.bestEffort()) throw e;
+                        if (!req.bestEffort()) {
+                            throw e;
+                        }
                     }
                 }
             }
@@ -81,8 +93,12 @@ public class LogStreamingService {
                             String line;
                             while ((line = br.readLine()) != null) {
                                 var ts = LogTimeFilter.parseTimestamp(line);
-                                if (ts.isEmpty()) unparsed.incrementAndGet();
-                                if (!LogTimeFilter.inRange(ts, req.from(), req.to())) continue;
+                                if (ts.isEmpty()) {
+                                    unparsed.incrementAndGet();
+                                }
+                                if (!LogTimeFilter.inRange(ts, req.from(), req.to())) {
+                                    continue;
+                                }
                                 byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                                 zip.write(bytes);
                                 written += bytes.length;
@@ -92,7 +108,9 @@ public class LogStreamingService {
                             zip.closeEntry();
                             writeError(zip, pod, e.getMessage());
                             stats.add(Map.of("pod", pod, "container", container, "status", "error", "error", e.getMessage()));
-                            if (!req.bestEffort()) throw e;
+                            if (!req.bestEffort()) {
+                                throw e;
+                            }
                             continue;
                         }
                         zip.closeEntry();
@@ -123,28 +141,55 @@ public class LogStreamingService {
     }
 
     private List<String> resolvePods(KubernetesClient client, String namespace, List<String> pods, String selector) {
-        if (pods != null && !pods.isEmpty()) return pods;
+        if (pods != null && !pods.isEmpty()) {
+            return pods;
+        }
         var op = client.pods().inNamespace(namespace);
         if (StringUtils.hasText(selector)) {
-            op = op.withLabelSelector(io.fabric8.kubernetes.client.utils.Utils.toLabelSelector(selector));
+            op = op.withLabels(LabelSelectorParser.parseEqualsSelector(selector));
         }
         return op.list().getItems().stream().map(p -> p.getMetadata().getName()).toList();
     }
 
     private List<String> resolveContainers(KubernetesClient client, String namespace, String pod, List<String> containers) {
-        if (containers != null && !containers.isEmpty()) return containers;
+        if (containers != null && !containers.isEmpty()) {
+            return containers;
+        }
         var resource = client.pods().inNamespace(namespace).withName(pod).get();
-        if (resource == null || resource.getSpec() == null || resource.getSpec().getContainers() == null) return List.of();
+        if (resource == null || resource.getSpec() == null || resource.getSpec().getContainers() == null) {
+            return List.of();
+        }
         return resource.getSpec().getContainers().stream().map(c -> c.getName()).toList();
     }
 
     private BufferedReader logReader(KubernetesClient client, String namespace, String pod, String container,
                                      Instant from, boolean previous, Long maxBytes) {
-        var op = client.pods().inNamespace(namespace).withName(pod).inContainer(container);
-        if (previous) op = op.terminated();
-        if (from != null) op = op.sinceTime(from.toString());
-        if (maxBytes != null && maxBytes > 0) op = op.limitBytes(Math.toIntExact(maxBytes));
-        Reader reader = op.getLogReader();
+        var base = client.pods().inNamespace(namespace).withName(pod).inContainer(container);
+        Reader reader;
+        boolean limit = maxBytes != null && maxBytes > 0;
+
+        if (previous) {
+            if (from != null && limit) {
+                reader = base.terminated().sinceTime(from.toString()).limitBytes(Math.toIntExact(maxBytes)).getLogReader();
+            } else if (from != null) {
+                reader = base.terminated().sinceTime(from.toString()).getLogReader();
+            } else if (limit) {
+                reader = base.terminated().limitBytes(Math.toIntExact(maxBytes)).getLogReader();
+            } else {
+                reader = base.terminated().getLogReader();
+            }
+        } else {
+            if (from != null && limit) {
+                reader = base.sinceTime(from.toString()).limitBytes(Math.toIntExact(maxBytes)).getLogReader();
+            } else if (from != null) {
+                reader = base.sinceTime(from.toString()).getLogReader();
+            } else if (limit) {
+                reader = base.limitBytes(Math.toIntExact(maxBytes)).getLogReader();
+            } else {
+                reader = base.getLogReader();
+            }
+        }
+
         return new BufferedReader(reader);
     }
 

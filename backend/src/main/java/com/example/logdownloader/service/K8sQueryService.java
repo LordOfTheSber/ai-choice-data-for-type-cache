@@ -3,6 +3,7 @@ package com.example.logdownloader.service;
 import com.example.logdownloader.config.K8sClientFactory;
 import com.example.logdownloader.config.K8sContoursProperties;
 import com.example.logdownloader.dto.WorkloadKind;
+import com.example.logdownloader.util.LabelSelectorParser;
 import io.fabric8.kubernetes.api.model.Namespace;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -47,7 +48,7 @@ public class K8sQueryService {
         try (KubernetesClient client = factory.createClient(contour)) {
             var op = client.pods().inNamespace(namespace);
             if (StringUtils.hasText(selector)) {
-                op = op.withLabelSelector(io.fabric8.kubernetes.client.utils.Utils.toLabelSelector(selector));
+                op = op.withLabels(LabelSelectorParser.parseEqualsSelector(selector));
             }
             return op.list().getItems().stream().map(Pod::getMetadata).map(m -> m.getName()).sorted().toList();
         }
