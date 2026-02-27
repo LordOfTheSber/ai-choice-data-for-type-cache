@@ -10,6 +10,8 @@ import com.example.logdownloader.util.LabelSelectorParser;
 import com.example.logdownloader.util.LogTimeFilter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
@@ -31,6 +33,7 @@ import java.util.zip.ZipOutputStream;
 @Service
 public class LogStreamingService {
 
+    private static final Logger log = LoggerFactory.getLogger(LogStreamingService.class);
     private static final String NO_OVERLAP_MARKER = "=====NO_OVERLAP_BOUNDARY=====";
 
     private final K8sClientFactory factory;
@@ -217,7 +220,9 @@ public class LogStreamingService {
             List<String> collected = new ArrayList<>();
             Instant pollTick = from;
             Instant sinceCursor = from;
+            int tickCount = 0;
 
+            log.info("Scheduled collect started pod={} container={} from={} to={} period={}s", pod, container, from, to, sec);
             while (!pollTick.isAfter(hardLimit)) {
                 waitUntil(pollTick);
 
@@ -234,11 +239,28 @@ public class LogStreamingService {
                         from,
                         to
                 );
-                appendSnapshotWithoutBoundaryDuplicates(collected, snapshot);
+                collected.addAll(snapshot);
+                tickCount++;
+
+                log.info("Scheduled collect tick pod={} container={} tick={} since={} until={} fetchedLines={} totalLines={}",
+                        pod,
+                        container,
+                        tickCount,
+                        sinceCursor,
+                        pollTick,
+                        snapshot.size(),
+                        collected.size());
 
                 sinceCursor = pollTick;
                 pollTick = pollTick.plus(period);
             }
+            log.info("Scheduled collect finished pod={} container={} ticks={} totalLines={} from={} to={}",
+                    pod,
+                    container,
+                    tickCount,
+                    collected.size(),
+                    from,
+                    to);
             return collected;
         }
 
@@ -292,9 +314,14 @@ public class LogStreamingService {
         List<String> result = new ArrayList<>();
         long emittedBytes = 0L;
 
+        long totalRead = 0L;
+        long inRange = 0L;
+        long afterUpperBound = 0L;
+
         try (BufferedReader br = logReader(client, namespace, pod, container, since, previous)) {
             String line;
             while ((line = br.readLine()) != null) {
+                totalRead++;
                 var ts = LogTimeFilter.parseTimestamp(line);
                 if (ts.isEmpty()) {
                     unparsedCounter.incrementAndGet();
@@ -303,18 +330,35 @@ public class LogStreamingService {
                 if (!LogTimeFilter.inRange(ts, rangeFrom, rangeTo)) {
                     continue;
                 }
+                inRange++;
                 if (ts.isPresent() && to != null && ts.get().isAfter(to)) {
+                    afterUpperBound++;
                     continue;
                 }
 
                 byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                 if (maxBytesExceeded(maxBytes, emittedBytes, bytes.length)) {
+                    log.warn("Max-bytes reached while filtering logs pod={} container={} since={} to={} emittedBytes={} nextLineBytes={} maxBytes={}",
+                            pod, container, since, to, emittedBytes, bytes.length, maxBytes);
                     break;
                 }
                 emittedBytes += bytes.length;
                 result.add(line);
             }
         }
+
+        log.info("Snapshot filtered pod={} container={} since={} to={} rangeFrom={} rangeTo={} readLines={} inRangeLines={} droppedAfterUpperBound={} emittedLines={} emittedBytes={}",
+                pod,
+                container,
+                since,
+                to,
+                rangeFrom,
+                rangeTo,
+                totalRead,
+                inRange,
+                afterUpperBound,
+                result.size(),
+                emittedBytes);
         return result;
     }
 
@@ -341,23 +385,6 @@ public class LogStreamingService {
         base.addAll(next);
     }
 
-    private void appendSnapshotWithoutBoundaryDuplicates(List<String> base, List<String> next) {
-        if (next.isEmpty()) {
-            return;
-        }
-        if (base.isEmpty()) {
-            base.addAll(next);
-            return;
-        }
-
-        int startIndex = 0;
-        while (startIndex < next.size() && base.get(base.size() - 1).equals(next.get(startIndex))) {
-            startIndex++;
-        }
-        if (startIndex < next.size()) {
-            base.addAll(next.subList(startIndex, next.size()));
-        }
-    }
 
     private void waitUntil(Instant target) {
         long ms = target.toEpochMilli() - System.currentTimeMillis();
