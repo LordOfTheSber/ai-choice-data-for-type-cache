@@ -164,7 +164,11 @@ public class LogStreamingService {
             return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
         }
 
-        int sec = pollIntervalSeconds == null || pollIntervalSeconds <= 0 ? 30 : pollIntervalSeconds;
+        if (pollIntervalSeconds == null || pollIntervalSeconds <= 0) {
+            return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
+        }
+
+        int sec = pollIntervalSeconds;
         Duration period = Duration.ofSeconds(sec);
         Instant hardLimit = to.plus(period); // one allowed read beyond to
 

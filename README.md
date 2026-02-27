@@ -35,6 +35,7 @@ npm run dev
 ```
 
 ## What changed
+- If period (`pollIntervalSeconds`) is `0` or negative, backend performs a single one-shot log snapshot for the selected interval (no periodic polling).
 - Async collect job follows schedule in real time: it polls container logs every UI period from `from` up to `to`, then finalizes and only after that returns `DONE`.
 - ZIP generation fixed: metadata is written without closing target `ZipOutputStream`, preventing corrupted archives and `Stream closed` on finalize.
 - Backend debugging logs: HTTP request/response bodies, status and exception traces are logged; service logs include async job lifecycle.
