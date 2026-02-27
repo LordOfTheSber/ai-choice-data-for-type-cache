@@ -35,6 +35,7 @@ npm run dev
 ```
 
 ## What changed
+- ZIP generation fixed: metadata is written without closing target `ZipOutputStream`, preventing corrupted archives and `Stream closed` on finalize.
 - Backend debugging logs: HTTP request/response bodies, status and exception traces are logged; service logs include async job lifecycle.
 - Async collect job now tolerates late `Stream closed` after partial archive write by finalizing job as DONE with warning when ZIP exists.
 - Пользовательский сценарий: contour-шаблон (например `sb_mg`) -> namespace -> pods/containers -> период времени (MSK) -> backend опрашивает логи через заданный период до конечного времени и один раз за его предел -> снапшоты склеиваются по совпадению последней строки; если совпадения нет, вставляется маркер `=====NO_OVERLAP_BOUNDARY=====`.

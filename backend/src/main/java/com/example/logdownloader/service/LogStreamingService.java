@@ -133,7 +133,8 @@ public class LogStreamingService {
                 metadata.put("containers", req.containers());
                 metadata.put("stats", stats);
                 metadata.put("unparsedTimestampCount", unparsed.get());
-                objectMapper.writeValue(zip, metadata);
+                byte[] metadataBytes = objectMapper.writeValueAsBytes(metadata);
+                zip.write(metadataBytes);
                 zip.closeEntry();
                 zip.finish();
             }
