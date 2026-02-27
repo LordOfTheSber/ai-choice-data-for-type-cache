@@ -35,6 +35,7 @@ npm run dev
 ```
 
 ## What changed
+- Пользовательский сценарий: contour-шаблон (например `sb_mg`) -> namespace -> pods/containers -> период времени (MSK) -> backend опрашивает логи через заданный период до конечного времени и один раз за его предел -> снапшоты склеиваются по совпадению последней строки; если совпадения нет, вставляется маркер `=====NO_OVERLAP_BOUNDARY=====`.
 - UI state (namespace/selector/pods/containers/time range/options) is persisted to file-backed storage via backend endpoint `PUT/GET /api/v1/preferences` (`backend/data/ui-preferences.json` at runtime).
 - Pods/containers listing is cached on frontend in Redux store for faster repeated selection flows.
 - DateTimePicker uses Moscow time and backend parses Moscow-local values to match log lines like `2026-02-26 17:10:12,447`.

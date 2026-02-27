@@ -193,7 +193,7 @@ export function App() {
       {saved && <div className="ok">{saved}</div>}
       <div className="hint">Период выбирается по московскому времени (как в логах: yyyy-MM-dd HH:mm:ss,SSS).</div>
       <div className="grid">
-        <label>Contour<input value={contour} onChange={e => setContour(e.target.value)} list="contours" placeholder="contour-a" /></label>
+        <label>Contour<input value={contour} onChange={e => setContour(e.target.value)} list="contours" placeholder="sb_mg" /></label>
         <datalist id="contours">{contours.map(c => <option key={c} value={c} />)}</datalist>
         <label>Namespace<input value={namespace} onChange={e => setNamespace(e.target.value)} /></label>
         <label>Selector<input value={selector} onChange={e => setSelector(e.target.value)} placeholder="app=my-service" /></label>

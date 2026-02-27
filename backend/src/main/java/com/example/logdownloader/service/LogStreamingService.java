@@ -31,6 +31,8 @@ import java.util.zip.ZipOutputStream;
 @Service
 public class LogStreamingService {
 
+    private static final String NO_OVERLAP_MARKER = "=====NO_OVERLAP_BOUNDARY=====";
+
     private final K8sClientFactory factory;
     private final ObjectMapper objectMapper;
 
@@ -53,7 +55,8 @@ public class LogStreamingService {
             for (String pod : resolvePods(client, req.namespace(), req.pods(), req.selector())) {
                 for (String container : resolveContainers(client, req.namespace(), pod, req.containers())) {
                     try {
-                        List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to, req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                        List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
+                                req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
                         for (String line : lines) {
                             total.incrementAndGet();
                             if (out.size() < limit) {
@@ -92,7 +95,8 @@ public class LogStreamingService {
                         long written = 0L;
                         zip.putNextEntry(new ZipEntry(path));
                         try {
-                            List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to, req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
+                            List<String> lines = collectWindowed(client, req.namespace(), pod, container, from, to,
+                                    req.previous(), req.maxBytes(), req.pollIntervalSeconds(), unparsed);
                             for (String line : lines) {
                                 byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
                                 if (maxBytesExceeded(req.maxBytes(), written, bytes.length)) {
@@ -146,65 +150,106 @@ public class LogStreamingService {
                                          Long maxBytes,
                                          Integer pollIntervalSeconds,
                                          AtomicLong unparsedCounter) throws IOException {
-        List<String> result = new ArrayList<>();
-        long emittedBytes = 0L;
-
         if (from == null || to == null || !from.isBefore(to)) {
-            try (BufferedReader br = logReader(client, namespace, pod, container, from, previous)) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    var ts = LogTimeFilter.parseTimestamp(line);
-                    if (ts.isEmpty()) {
-                        unparsedCounter.incrementAndGet();
-                    }
-                    if (!LogTimeFilter.inRange(ts, from, to)) {
-                        continue;
-                    }
-                    byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
-                    if (maxBytesExceeded(maxBytes, emittedBytes, bytes.length)) {
-                        break;
-                    }
-                    emittedBytes += bytes.length;
-                    result.add(line);
-                }
-            }
-            return result;
+            return readSnapshotFiltered(client, namespace, pod, container, from, to, previous, maxBytes, unparsedCounter, from, to);
         }
 
         int sec = pollIntervalSeconds == null || pollIntervalSeconds <= 0 ? 30 : pollIntervalSeconds;
-        Duration chunk = Duration.ofSeconds(sec);
+        Duration period = Duration.ofSeconds(sec);
+        Instant hardLimit = to.plus(period); // one allowed read beyond to
+
+        List<String> stitched = new ArrayList<>();
         Instant cursor = from;
+        boolean first = true;
 
-        while (cursor.isBefore(to)) {
-            Instant windowEnd = cursor.plus(chunk);
-            if (windowEnd.isAfter(to)) {
-                windowEnd = to;
-            }
+        while (!cursor.isAfter(hardLimit)) {
+            List<String> snapshot = readSnapshotFiltered(
+                    client,
+                    namespace,
+                    pod,
+                    container,
+                    cursor,
+                    hardLimit,
+                    previous,
+                    maxBytes,
+                    unparsedCounter,
+                    from,
+                    hardLimit
+            );
 
-            try (BufferedReader br = logReader(client, namespace, pod, container, cursor, previous)) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    var ts = LogTimeFilter.parseTimestamp(line);
-                    if (ts.isEmpty()) {
-                        unparsedCounter.incrementAndGet();
-                        continue;
-                    }
-                    Instant parsed = ts.get();
-                    if (parsed.isBefore(cursor) || parsed.isAfter(windowEnd)) {
-                        continue;
-                    }
-                    byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
-                    if (maxBytesExceeded(maxBytes, emittedBytes, bytes.length)) {
-                        return result;
-                    }
-                    emittedBytes += bytes.length;
-                    result.add(line);
-                }
+            if (first) {
+                stitched.addAll(snapshot);
+                first = false;
+            } else {
+                stitchSnapshots(stitched, snapshot);
             }
-            cursor = windowEnd.plusMillis(1);
+            cursor = cursor.plus(period);
         }
 
+        return stitched;
+    }
+
+    private List<String> readSnapshotFiltered(KubernetesClient client,
+                                              String namespace,
+                                              String pod,
+                                              String container,
+                                              Instant since,
+                                              Instant to,
+                                              boolean previous,
+                                              Long maxBytes,
+                                              AtomicLong unparsedCounter,
+                                              Instant rangeFrom,
+                                              Instant rangeTo) throws IOException {
+        List<String> result = new ArrayList<>();
+        long emittedBytes = 0L;
+
+        try (BufferedReader br = logReader(client, namespace, pod, container, since, previous)) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                var ts = LogTimeFilter.parseTimestamp(line);
+                if (ts.isEmpty()) {
+                    unparsedCounter.incrementAndGet();
+                }
+
+                if (!LogTimeFilter.inRange(ts, rangeFrom, rangeTo)) {
+                    continue;
+                }
+                if (ts.isPresent() && to != null && ts.get().isAfter(to)) {
+                    continue;
+                }
+
+                byte[] bytes = (line + "\n").getBytes(StandardCharsets.UTF_8);
+                if (maxBytesExceeded(maxBytes, emittedBytes, bytes.length)) {
+                    break;
+                }
+                emittedBytes += bytes.length;
+                result.add(line);
+            }
+        }
         return result;
+    }
+
+    private void stitchSnapshots(List<String> base, List<String> next) {
+        if (next.isEmpty()) {
+            return;
+        }
+        if (base.isEmpty()) {
+            base.addAll(next);
+            return;
+        }
+
+        String anchor = base.get(base.size() - 1);
+        int overlapIndex = next.indexOf(anchor);
+        if (overlapIndex >= 0 && overlapIndex + 1 < next.size()) {
+            base.addAll(next.subList(overlapIndex + 1, next.size()));
+            return;
+        }
+        if (overlapIndex >= 0) {
+            return;
+        }
+
+        base.add(NO_OVERLAP_MARKER);
+        base.addAll(next);
     }
 
     private KubernetesClient createClient(String contour, boolean master) {
