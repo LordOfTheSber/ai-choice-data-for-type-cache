@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: k8s-log-downloader
+
+server:
+  port: 8080
+
+app:
+  k8s:
+    skipTlsVerify: ${K8S_SKIP_TLS_VERIFY:true}
+    contours:
+      contour-a:
+        testsK8sUrl: ${CONTOUR_A_TESTS_K8S_URL:https://api.example.cluster:6443}
+        testsK8sToken: ${CONTOUR_A_TESTS_K8S_TOKEN:change-me}
+        masterK8sToken: ${CONTOUR_A_MASTER_K8S_TOKEN:change-me}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    root: INFO
+    com.example.logdownloader: DEBUG

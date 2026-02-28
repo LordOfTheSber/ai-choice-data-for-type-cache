@@ -1,7 +1,0 @@
-server:
-  # For local development, certificates are not required.
-  ssl:
-    enabled: false
-
-http3:
-  enabled: false

@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-log-downloader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-log-downloader
+  template:
+    metadata:
+      labels:
+        app: k8s-log-downloader
+    spec:
+      serviceAccountName: log-downloader
+      containers:
+        - name: app
+          image: your-registry/k8s-log-downloader:latest
+          ports:
+            - containerPort: 8080
