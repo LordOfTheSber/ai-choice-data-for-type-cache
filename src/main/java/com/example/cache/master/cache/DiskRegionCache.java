@@ -1,6 +1,9 @@
 package com.example.cache.master.cache;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.example.cache.master.cache.config.CacheProperties;
+import com.example.cache.master.cache.error.CacheIoException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.DataInputStream;
@@ -19,62 +22,27 @@ import java.util.HexFormat;
 import java.util.Optional;
 import java.util.concurrent.locks.ReentrantLock;
 
-/**
- * Simple L3 disk cache stub: key -> file. Optimized serialization can be switched
- * to Kryo + compression later.
- */
 @Component
 public class DiskRegionCache implements CacheStore {
-    private static final int LOCK_STRIPES = 64;
+    private static final Logger log = LoggerFactory.getLogger(DiskRegionCache.class);
 
     private final Path baseDirectory;
-    private final ReentrantLock[] locks;
+    private final ReentrantLock[] stripes;
 
-    public DiskRegionCache(@Value("${cache.l3.path:./data/l3-cache}") String baseDirectory) {
-        this.baseDirectory = Paths.get(baseDirectory);
-        this.locks = new ReentrantLock[LOCK_STRIPES];
-        for (int i = 0; i < LOCK_STRIPES; i++) {
-            this.locks[i] = new ReentrantLock();
-        }
-        try {
-            Files.createDirectories(this.baseDirectory);
-        } catch (IOException e) {
-            throw new IllegalStateException("Cannot initialize disk cache directory: " + this.baseDirectory, e);
-        }
+    public DiskRegionCache(CacheProperties cacheProperties) {
+        this.baseDirectory = Paths.get(cacheProperties.getL3().getPath());
+        this.stripes = createLocks(cacheProperties.getL3().getLockStripes());
+        createDirectory(baseDirectory);
     }
 
     @Override
     public Optional<CacheValue> get(String key) {
-        Path file = pathForKey(key);
         ReentrantLock lock = lockForKey(key);
         lock.lock();
         try {
-            if (!Files.exists(file)) {
-                return Optional.empty();
-            }
-
-            DiskRecord record = readRecord(file);
-            if (record == null) {
-                return Optional.empty();
-            }
-
-            if (isExpired(record.ttlMillis(), record.createdAtEpochMillis())) {
-                Files.deleteIfExists(file);
-                return Optional.empty();
-            }
-
-            // TODO(Kryo integration): deserialize payload bytes into typed object via Kryo.
-            // For now we return raw bytes as Object placeholder.
-            CacheValue value = new CacheValue(
-                record.payload(),
-                record.dataClass(),
-                Duration.ofMillis(record.ttlMillis()),
-                CacheStatus.HIT,
-                record.version()
-            );
-            return Optional.of(value);
-        } catch (IOException e) {
-            throw new IllegalStateException("Cannot read disk cache file for key=" + key, e);
+            return readValue(key);
+        } catch (IOException exception) {
+            throw new CacheIoException("Failed to read disk cache for key=" + key, exception);
         } finally {
             lock.unlock();
         }
@@ -82,37 +50,16 @@ public class DiskRegionCache implements CacheStore {
 
     @Override
     public void put(String key, CacheValue value) {
-        Path file = pathForKey(key);
         ReentrantLock lock = lockForKey(key);
         lock.lock();
         try {
-            if (Files.exists(file)) {
-                DiskRecord existing = readRecord(file);
-                if (existing != null && existing.version() > value.getVersion()) {
-                    return;
-                }
+            if (isStaleWrite(key, value.getVersion())) {
+                log.debug("Skip stale L3 update for key={} version={}", key, value.getVersion());
+                return;
             }
-
-            byte[] payload = toPayloadBytes(value.getValue());
-            Path tmpFile = file.resolveSibling(file.getFileName() + ".tmp");
-
-            try (DataOutputStream out = new DataOutputStream(Files.newOutputStream(tmpFile))) {
-                out.writeUTF(value.getDataClass().name());
-                out.writeUTF(value.getStatus().name());
-                out.writeLong(value.getVersion());
-                out.writeLong(value.getTtl().toMillis());
-                out.writeLong(Instant.now().toEpochMilli());
-                out.writeInt(payload.length);
-                out.write(payload);
-            }
-
-            try {
-                Files.move(tmpFile, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (IOException atomicMoveError) {
-                Files.move(tmpFile, file, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException("Cannot write disk cache file for key=" + key, e);
+            writeRecordAtomically(pathForKey(key), DiskRecord.fromValue(value));
+        } catch (IOException exception) {
+            throw new CacheIoException("Failed to write disk cache for key=" + key, exception);
         } finally {
             lock.unlock();
         }
@@ -124,8 +71,8 @@ public class DiskRegionCache implements CacheStore {
         lock.lock();
         try {
             Files.deleteIfExists(pathForKey(key));
-        } catch (IOException e) {
-            throw new IllegalStateException("Cannot delete disk cache file for key=" + key, e);
+        } catch (IOException exception) {
+            throw new CacheIoException("Failed to delete disk cache for key=" + key, exception);
         } finally {
             lock.unlock();
         }
@@ -136,12 +83,100 @@ public class DiskRegionCache implements CacheStore {
         return get(key).isPresent();
     }
 
+    private Optional<CacheValue> readValue(String key) throws IOException {
+        Path path = pathForKey(key);
+        if (!Files.exists(path)) {
+            return Optional.empty();
+        }
+        DiskRecord record = readRecord(path);
+        if (isExpired(record.ttlMillis(), record.createdAtEpochMillis())) {
+            Files.deleteIfExists(path);
+            return Optional.empty();
+        }
+        return Optional.of(record.toCacheHit());
+    }
+
+    private boolean isStaleWrite(String key, long incomingVersion) throws IOException {
+        Path path = pathForKey(key);
+        if (!Files.exists(path)) {
+            return false;
+        }
+        return readRecord(path).version() > incomingVersion;
+    }
+
+    private void writeRecordAtomically(Path targetPath, DiskRecord record) throws IOException {
+        Path tempPath = temporaryPath(targetPath);
+        writeRecord(tempPath, record);
+        moveAtomically(tempPath, targetPath);
+    }
+
+    private void writeRecord(Path path, DiskRecord record) throws IOException {
+        try (DataOutputStream stream = new DataOutputStream(Files.newOutputStream(path))) {
+            stream.writeUTF(record.dataClass().name());
+            stream.writeUTF(record.status().name());
+            stream.writeLong(record.version());
+            stream.writeLong(record.ttlMillis());
+            stream.writeLong(record.createdAtEpochMillis());
+            stream.writeInt(record.payload().length);
+            stream.write(record.payload());
+        }
+    }
+
+    private DiskRecord readRecord(Path path) throws IOException {
+        try (DataInputStream stream = new DataInputStream(Files.newInputStream(path))) {
+            DataClass dataClass = DataClass.valueOf(stream.readUTF());
+            CacheStatus status = CacheStatus.valueOf(stream.readUTF());
+            long version = stream.readLong();
+            long ttlMillis = stream.readLong();
+            long createdAtEpochMillis = stream.readLong();
+            int payloadLength = stream.readInt();
+            byte[] payload = stream.readNBytes(payloadLength);
+            return new DiskRecord(dataClass, status, version, ttlMillis, createdAtEpochMillis, payload);
+        }
+    }
+
+    private void moveAtomically(Path tempPath, Path targetPath) throws IOException {
+        try {
+            Files.move(tempPath, targetPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException moveException) {
+            Files.move(tempPath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private ReentrantLock[] createLocks(int lockStripes) {
+        ReentrantLock[] locks = new ReentrantLock[lockStripes];
+        for (int index = 0; index < lockStripes; index++) {
+            locks[index] = new ReentrantLock();
+        }
+        return locks;
+    }
+
+    private void createDirectory(Path directory) {
+        try {
+            Files.createDirectories(directory);
+        } catch (IOException exception) {
+            throw new CacheIoException("Failed to create disk cache directory: " + directory, exception);
+        }
+    }
+
+    private boolean isExpired(long ttlMillis, long createdAtMillis) {
+        if (ttlMillis <= 0L) {
+            return false;
+        }
+        long ageMillis = Instant.now().toEpochMilli() - createdAtMillis;
+        return ageMillis >= ttlMillis;
+    }
+
     private Path pathForKey(String key) {
         return baseDirectory.resolve(hashKey(key) + ".bin");
     }
 
+    private Path temporaryPath(Path targetPath) {
+        return targetPath.resolveSibling(targetPath.getFileName() + ".tmp");
+    }
+
     private ReentrantLock lockForKey(String key) {
-        return locks[Math.floorMod(key.hashCode(), LOCK_STRIPES)];
+        return stripes[Math.floorMod(key.hashCode(), stripes.length)];
     }
 
     private String hashKey(String key) {
@@ -149,42 +184,8 @@ public class DiskRegionCache implements CacheStore {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(key.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is not available", e);
-        }
-    }
-
-    private boolean isExpired(long ttlMillis, long createdAtMillis) {
-        if (ttlMillis <= 0) {
-            return false;
-        }
-        long ageMillis = Instant.now().toEpochMilli() - createdAtMillis;
-        return ageMillis >= ttlMillis;
-    }
-
-    private byte[] toPayloadBytes(Object value) {
-        if (value == null) {
-            return new byte[0];
-        }
-
-        if (value instanceof byte[] bytes) {
-            return bytes;
-        }
-
-        // TODO(Kryo integration): replace with Kryo serialization + optional LZ4 compression.
-        return value.toString().getBytes(StandardCharsets.UTF_8);
-    }
-
-    private DiskRecord readRecord(Path file) throws IOException {
-        try (DataInputStream in = new DataInputStream(Files.newInputStream(file))) {
-            DataClass dataClass = DataClass.valueOf(in.readUTF());
-            CacheStatus status = CacheStatus.valueOf(in.readUTF());
-            long version = in.readLong();
-            long ttlMillis = in.readLong();
-            long createdAtEpochMillis = in.readLong();
-            int payloadLength = in.readInt();
-            byte[] payload = in.readNBytes(payloadLength);
-            return new DiskRecord(dataClass, status, version, ttlMillis, createdAtEpochMillis, payload);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new CacheIoException("SHA-256 is unavailable", exception);
         }
     }
 
@@ -196,5 +197,33 @@ public class DiskRegionCache implements CacheStore {
         long createdAtEpochMillis,
         byte[] payload
     ) {
+        private static DiskRecord fromValue(CacheValue value) {
+            byte[] payload = toPayloadBytes(value.getValue());
+            long createdAt = Instant.now().toEpochMilli();
+            return new DiskRecord(
+                value.getDataClass(),
+                value.getStatus(),
+                value.getVersion(),
+                value.getTtl().toMillis(),
+                createdAt,
+                payload
+            );
+        }
+
+        private CacheValue toCacheHit() {
+            // TODO: replace raw payload handoff with preconfigured Kryo deserializer.
+            return new CacheValue(payload, dataClass, Duration.ofMillis(ttlMillis), CacheStatus.HIT, version);
+        }
+
+        private static byte[] toPayloadBytes(Object value) {
+            if (value == null) {
+                return new byte[0];
+            }
+            if (value instanceof byte[] bytes) {
+                return bytes;
+            }
+            // TODO: replace with Kryo serializer and optional LZ4 compression pipeline.
+            return value.toString().getBytes(StandardCharsets.UTF_8);
+        }
     }
 }

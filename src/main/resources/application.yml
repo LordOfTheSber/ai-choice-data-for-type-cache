@@ -32,3 +32,14 @@ master:
       classC:
         maxEntries: 200000
         maxMemoryMb: 2048
+
+cache:
+  hot-region:
+    promotion-threshold: 5
+  l3:
+    enabled: true
+    path: ./data/l3-cache
+    lock-stripes: 64
+
+cluster:
+  heartbeat-timeout-millis: 5000

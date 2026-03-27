@@ -1,18 +1,23 @@
 package com.example.cache.master.cache;
 
+import com.example.cache.master.support.TestCachePropertiesFactory;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class InMemoryRegionCacheTest {
 
-    private final InMemoryRegionCache cache = new InMemoryRegionCache();
-
     @Test
     void getShouldReturnEmptyForUnknownKey() {
+        InMemoryRegionCache cache = cache();
+
         Optional<CacheValue> value = cache.get("unknown");
 
         assertTrue(value.isEmpty());
@@ -21,20 +26,9 @@ class InMemoryRegionCacheTest {
     }
 
     @Test
-    void putAndGetShouldWorkForRegion() {
-        CacheValue value = value("book:1", DataClass.IMMUTABLE, 5);
-
-        cache.put("book:1", value);
-        Optional<CacheValue> restored = cache.get("book:1");
-
-        assertTrue(restored.isPresent());
-        assertEquals(5L, restored.get().getVersion());
-        assertEquals(DataClass.IMMUTABLE, restored.get().getDataClass());
-        assertEquals(CacheStatus.HIT, restored.get().getStatus());
-    }
-
-    @Test
     void putShouldNotOverrideNewerVersionWithOlderVersion() {
+        InMemoryRegionCache cache = cache();
+
         cache.put("k1", value("new", DataClass.MEDIUM, 10));
         cache.put("k1", value("old", DataClass.MEDIUM, 1));
 
@@ -46,7 +40,9 @@ class InMemoryRegionCacheTest {
     }
 
     @Test
-    void putWithNewerVersionShouldMoveKeyAcrossRegions() {
+    void keyShouldMoveAcrossRegionsWhenNewerVersionArrives() {
+        InMemoryRegionCache cache = cache();
+
         cache.put("k2", value("v1", DataClass.MEDIUM, 2));
         cache.put("k2", value("v2", DataClass.DYNAMIC, 3));
 
@@ -59,6 +55,7 @@ class InMemoryRegionCacheTest {
 
     @Test
     void entryShouldExpireByTtl() throws InterruptedException {
+        InMemoryRegionCache cache = cache();
         cache.put("short", new CacheValue("v", DataClass.DYNAMIC, Duration.ofMillis(30), CacheStatus.COLD, 1));
 
         Thread.sleep(60);
@@ -68,15 +65,47 @@ class InMemoryRegionCacheTest {
     }
 
     @Test
-    void entryShouldBePromotedToHotRegionAfterHitsThreshold() {
+    void burstReadShouldPromoteHotKeyAndKeepHitStats() {
+        InMemoryRegionCache cache = cache();
         cache.put("hot-key", value("payload", DataClass.IMMUTABLE, 1));
 
-        for (int i = 0; i < 6; i++) {
+        for (int iteration = 0; iteration < 6; iteration++) {
             assertTrue(cache.get("hot-key").isPresent());
         }
 
         assertTrue(cache.contains("hot-key"));
         assertTrue(cache.getTotalHits() >= 6);
+    }
+
+    @Test
+    void concurrentPutShouldKeepLatestVersion() throws InterruptedException {
+        InMemoryRegionCache cache = cache();
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+        CountDownLatch latch = new CountDownLatch(40);
+
+        for (int version = 1; version <= 40; version++) {
+            final int finalVersion = version;
+            executor.submit(() -> updateWithVersion(cache, finalVersion, latch));
+        }
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        executor.shutdownNow();
+
+        CacheValue actual = cache.get("parallel").orElseThrow();
+        assertEquals(40L, actual.getVersion());
+        assertEquals("v40", actual.getValue());
+    }
+
+    private void updateWithVersion(InMemoryRegionCache cache, int version, CountDownLatch latch) {
+        try {
+            cache.put("parallel", value("v" + version, DataClass.IMMUTABLE, version));
+        } finally {
+            latch.countDown();
+        }
+    }
+
+    private InMemoryRegionCache cache() {
+        return new InMemoryRegionCache(TestCachePropertiesFactory.withDiskPath("./build/test-l3"));
     }
 
     private CacheValue value(String payload, DataClass dataClass, long version) {
