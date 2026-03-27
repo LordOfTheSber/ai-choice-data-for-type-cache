@@ -8,12 +8,21 @@ public final class CacheValue {
     private final DataClass dataClass;
     private final Duration ttl;
     private final CacheStatus status;
+    private final long version;
 
-    public CacheValue(Object value, DataClass dataClass, Duration ttl, CacheStatus status) {
+    public CacheValue(Object value,
+                      DataClass dataClass,
+                      Duration ttl,
+                      CacheStatus status,
+                      long version) {
         this.value = value;
         this.dataClass = Objects.requireNonNull(dataClass, "dataClass must not be null");
         this.ttl = Objects.requireNonNull(ttl, "ttl must not be null");
         this.status = Objects.requireNonNull(status, "status must not be null");
+        if (version < 0) {
+            throw new IllegalArgumentException("version must be >= 0");
+        }
+        this.version = version;
     }
 
     public Object getValue() {
@@ -32,7 +41,11 @@ public final class CacheValue {
         return status;
     }
 
+    public long getVersion() {
+        return version;
+    }
+
     public CacheValue withStatus(CacheStatus newStatus) {
-        return new CacheValue(this.value, this.dataClass, this.ttl, newStatus);
+        return new CacheValue(this.value, this.dataClass, this.ttl, newStatus, this.version);
     }
 }

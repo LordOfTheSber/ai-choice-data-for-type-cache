@@ -25,6 +25,10 @@ public final class CacheEntry {
         return cacheValue;
     }
 
+    public long getVersion() {
+        return cacheValue.getVersion();
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }

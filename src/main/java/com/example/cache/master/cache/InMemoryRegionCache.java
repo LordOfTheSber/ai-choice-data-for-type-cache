@@ -49,11 +49,25 @@ public class InMemoryRegionCache implements CacheStore {
 
     @Override
     public void put(String key, CacheValue value) {
-        CacheEntry entry = new CacheEntry(value);
-        regions.get(value.getDataClass()).put(key, entry);
+        ConcurrentHashMap<String, CacheEntry> targetRegion = regions.get(value.getDataClass());
+        CacheEntry candidate = new CacheEntry(value);
 
-        if (value.getStatus() == CacheStatus.HOT) {
-            hotRegion.put(key, entry);
+        CacheEntry selected = targetRegion.compute(key, (ignored, existing) -> {
+            if (existing == null || value.getVersion() >= existing.getVersion()) {
+                return candidate;
+            }
+            return existing;
+        });
+
+        if (selected == candidate) {
+            removeFromOtherRegions(key, value.getDataClass(), value.getVersion());
+            if (value.getStatus() == CacheStatus.HOT) {
+                hotRegion.put(key, candidate);
+            } else {
+                hotRegion.computeIfPresent(key, (ignored, oldEntry) ->
+                    oldEntry.getVersion() <= value.getVersion() ? candidate : oldEntry
+                );
+            }
         }
     }
 
@@ -67,7 +81,18 @@ public class InMemoryRegionCache implements CacheStore {
 
     @Override
     public boolean contains(String key) {
-        return get(key).isPresent();
+        CacheEntry hotEntry = hotRegion.get(key);
+        if (hotEntry != null && !hotEntry.isExpired()) {
+            return true;
+        }
+
+        for (ConcurrentHashMap<String, CacheEntry> region : regions.values()) {
+            CacheEntry entry = region.get(key);
+            if (entry != null && !entry.isExpired()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public long getTotalHits() {
@@ -83,8 +108,8 @@ public class InMemoryRegionCache implements CacheStore {
                                                 ConcurrentHashMap<String, CacheEntry> owningRegion) {
         if (entry.isExpired()) {
             entry.markMiss();
-            owningRegion.remove(key);
-            hotRegion.remove(key);
+            owningRegion.remove(key, entry);
+            hotRegion.remove(key, entry);
             totalMisses.incrementAndGet();
             return Optional.empty();
         }
@@ -96,7 +121,23 @@ public class InMemoryRegionCache implements CacheStore {
 
     private void promoteToHotRegionIfNeeded(String key, CacheEntry entry) {
         if (entry.getHitCount() >= HOT_PROMOTION_THRESHOLD) {
-            hotRegion.put(key, entry);
+            hotRegion.compute(key, (ignored, existingHot) -> {
+                if (existingHot == null || existingHot.getVersion() <= entry.getVersion()) {
+                    return entry;
+                }
+                return existingHot;
+            });
+        }
+    }
+
+    private void removeFromOtherRegions(String key, DataClass targetClass, long minVersionToRemove) {
+        for (Map.Entry<DataClass, ConcurrentHashMap<String, CacheEntry>> region : regions.entrySet()) {
+            if (region.getKey() == targetClass) {
+                continue;
+            }
+            region.getValue().computeIfPresent(key, (ignored, existing) ->
+                existing.getVersion() <= minVersionToRemove ? null : existing
+            );
         }
     }
 }
