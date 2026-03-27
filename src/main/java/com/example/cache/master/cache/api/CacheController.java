@@ -3,7 +3,8 @@ package com.example.cache.master.cache.api;
 import com.example.cache.master.cache.CacheStatus;
 import com.example.cache.master.cache.CacheValue;
 import com.example.cache.master.cache.MasterCacheService;
-import jakarta.validation.Valid;
+import com.example.cache.master.cache.error.CacheErrorCode;
+import com.example.cache.master.cache.error.CacheException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -34,7 +35,8 @@ public class CacheController {
     }
 
     @PutMapping("/{key}")
-    public ResponseEntity<Void> put(@PathVariable String key, @RequestBody @Valid CachePutRequest request) {
+    public ResponseEntity<Void> put(@PathVariable String key, @RequestBody CachePutRequest request) {
+        validatePutRequest(request);
         CacheValue value = new CacheValue(
             request.payload(),
             request.dataClass(),
@@ -50,6 +52,21 @@ public class CacheController {
     public ResponseEntity<Void> delete(@PathVariable String key) {
         masterCacheService.delete(key);
         return ResponseEntity.noContent().build();
+    }
+
+    private void validatePutRequest(CachePutRequest request) {
+        if (request == null) {
+            throw new CacheException(CacheErrorCode.VALIDATION_ERROR, "request must not be null");
+        }
+        if (request.payload() == null || request.payload().isBlank()) {
+            throw new CacheException(CacheErrorCode.VALIDATION_ERROR, "payload must not be blank");
+        }
+        if (request.dataClass() == null) {
+            throw new CacheException(CacheErrorCode.VALIDATION_ERROR, "dataClass must not be null");
+        }
+        if (request.ttlMillis() <= 0L || request.version() < 0L) {
+            throw new CacheException(CacheErrorCode.VALIDATION_ERROR, "ttlMillis/version are invalid");
+        }
     }
 
     private CacheGetResponse toResponse(String key, CacheValue value) {

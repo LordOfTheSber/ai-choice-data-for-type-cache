@@ -1,11 +1,7 @@
 package com.example.cache.master.cache.config;
 
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.validation.annotation.Validated;
 
-@Validated
 @ConfigurationProperties(prefix = "cache")
 public class CacheProperties {
     private final HotRegion hotRegion = new HotRegion();
@@ -20,7 +16,6 @@ public class CacheProperties {
     }
 
     public static class HotRegion {
-        @Min(1)
         private int promotionThreshold = 5;
 
         public int getPromotionThreshold() {
@@ -35,10 +30,8 @@ public class CacheProperties {
     public static class L3 {
         private boolean enabled = true;
 
-        @NotBlank
         private String path = "./data/l3-cache";
 
-        @Min(1)
         private int lockStripes = 64;
 
         public boolean isEnabled() {
