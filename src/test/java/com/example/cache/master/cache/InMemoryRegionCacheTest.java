@@ -4,6 +4,7 @@ import com.example.cache.master.support.TestCachePropertiesFactory;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -18,7 +19,7 @@ class InMemoryRegionCacheTest {
     void getShouldReturnEmptyForUnknownKey() {
         InMemoryRegionCache cache = cache();
 
-        Optional<CacheValue> value = cache.get("unknown");
+        Optional<CacheEntry> value = cache.get("unknown");
 
         assertTrue(value.isEmpty());
         assertEquals(0L, cache.getTotalHits());
@@ -29,24 +30,24 @@ class InMemoryRegionCacheTest {
     void putShouldNotOverrideNewerVersionWithOlderVersion() {
         InMemoryRegionCache cache = cache();
 
-        cache.put("k1", value("new", DataClass.MEDIUM, 10));
-        cache.put("k1", value("old", DataClass.MEDIUM, 1));
+        cache.put("k1", entry("new", DataClass.MEDIUM, 10));
+        cache.put("k1", entry("old", DataClass.MEDIUM, 1));
 
-        Optional<CacheValue> actual = cache.get("k1");
+        Optional<CacheEntry> actual = cache.get("k1");
 
         assertTrue(actual.isPresent());
         assertEquals(10L, actual.get().getVersion());
-        assertEquals("new", actual.get().getValue());
+        assertArrayEquals("new".getBytes(), actual.get().getPayload());
     }
 
     @Test
     void keyShouldMoveAcrossRegionsWhenNewerVersionArrives() {
         InMemoryRegionCache cache = cache();
 
-        cache.put("k2", value("v1", DataClass.MEDIUM, 2));
-        cache.put("k2", value("v2", DataClass.DYNAMIC, 3));
+        cache.put("k2", entry("v1", DataClass.MEDIUM, 2));
+        cache.put("k2", entry("v2", DataClass.DYNAMIC, 3));
 
-        Optional<CacheValue> actual = cache.get("k2");
+        Optional<CacheEntry> actual = cache.get("k2");
 
         assertTrue(actual.isPresent());
         assertEquals(DataClass.DYNAMIC, actual.get().getDataClass());
@@ -56,7 +57,16 @@ class InMemoryRegionCacheTest {
     @Test
     void entryShouldExpireByTtl() throws InterruptedException {
         InMemoryRegionCache cache = cache();
-        cache.put("short", new CacheValue("v", DataClass.DYNAMIC, Duration.ofMillis(30), CacheStatus.COLD, 1));
+        CacheEntry expiring = new CacheEntry(
+            "v".getBytes(),
+            String.class.getName(),
+            DataClass.DYNAMIC,
+            30,
+            CacheStatus.COLD,
+            1,
+            Instant.now()
+        );
+        cache.put("short", expiring);
 
         Thread.sleep(60);
 
@@ -67,7 +77,7 @@ class InMemoryRegionCacheTest {
     @Test
     void burstReadShouldPromoteHotKeyAndKeepHitStats() {
         InMemoryRegionCache cache = cache();
-        cache.put("hot-key", value("payload", DataClass.IMMUTABLE, 1));
+        cache.put("hot-key", entry("payload", DataClass.IMMUTABLE, 1));
 
         for (int iteration = 0; iteration < 6; iteration++) {
             assertTrue(cache.get("hot-key").isPresent());
@@ -91,14 +101,14 @@ class InMemoryRegionCacheTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         executor.shutdownNow();
 
-        CacheValue actual = cache.get("parallel").orElseThrow();
+        CacheEntry actual = cache.get("parallel").orElseThrow();
         assertEquals(40L, actual.getVersion());
-        assertEquals("v40", actual.getValue());
+        assertArrayEquals("v40".getBytes(), actual.getPayload());
     }
 
     private void updateWithVersion(InMemoryRegionCache cache, int version, CountDownLatch latch) {
         try {
-            cache.put("parallel", value("v" + version, DataClass.IMMUTABLE, version));
+            cache.put("parallel", entry("v" + version, DataClass.IMMUTABLE, version));
         } finally {
             latch.countDown();
         }
@@ -108,7 +118,7 @@ class InMemoryRegionCacheTest {
         return new InMemoryRegionCache(TestCachePropertiesFactory.withDiskPath("./build/test-l3"));
     }
 
-    private CacheValue value(String payload, DataClass dataClass, long version) {
-        return new CacheValue(payload, dataClass, Duration.ofMinutes(5), CacheStatus.COLD, version);
+    private CacheEntry entry(String payload, DataClass dataClass, long version) {
+        return new CacheEntry(payload.getBytes(), String.class.getName(), dataClass, Duration.ofMinutes(5), CacheStatus.COLD, version);
     }
 }

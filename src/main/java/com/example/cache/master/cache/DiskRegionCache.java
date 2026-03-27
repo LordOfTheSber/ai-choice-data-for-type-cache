@@ -17,7 +17,6 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
@@ -37,24 +36,20 @@ public class DiskRegionCache implements CacheStore {
     }
 
     @Override
-    public Optional<CacheValue> get(String key) {
+    public Optional<CacheEntry> get(String key) {
         ReentrantLock lock = lockForKey(key);
         lock.lock();
         try {
             return readValue(key);
         } catch (IOException exception) {
-            throw new CacheException(
-                CacheErrorCode.DISK_IO_ERROR,
-                "Failed to read disk cache for key=" + key,
-                exception
-            );
+            throw ioException("Failed to read disk cache for key=" + key, exception);
         } finally {
             lock.unlock();
         }
     }
 
     @Override
-    public void put(String key, CacheValue value) {
+    public void put(String key, CacheEntry value) {
         ReentrantLock lock = lockForKey(key);
         lock.lock();
         try {
@@ -62,13 +57,9 @@ public class DiskRegionCache implements CacheStore {
                 log.debug("Skip stale L3 update for key={} version={}", key, value.getVersion());
                 return;
             }
-            writeRecordAtomically(pathForKey(key), DiskRecord.fromValue(value));
+            writeRecordAtomically(pathForKey(key), DiskRecord.fromEntry(value));
         } catch (IOException exception) {
-            throw new CacheException(
-                CacheErrorCode.DISK_IO_ERROR,
-                "Failed to write disk cache for key=" + key,
-                exception
-            );
+            throw ioException("Failed to write disk cache for key=" + key, exception);
         } finally {
             lock.unlock();
         }
@@ -81,11 +72,7 @@ public class DiskRegionCache implements CacheStore {
         try {
             Files.deleteIfExists(pathForKey(key));
         } catch (IOException exception) {
-            throw new CacheException(
-                CacheErrorCode.DISK_IO_ERROR,
-                "Failed to delete disk cache for key=" + key,
-                exception
-            );
+            throw ioException("Failed to delete disk cache for key=" + key, exception);
         } finally {
             lock.unlock();
         }
@@ -96,7 +83,7 @@ public class DiskRegionCache implements CacheStore {
         return get(key).isPresent();
     }
 
-    private Optional<CacheValue> readValue(String key) throws IOException {
+    private Optional<CacheEntry> readValue(String key) throws IOException {
         Path path = pathForKey(key);
         if (!Files.exists(path)) {
             return Optional.empty();
@@ -106,7 +93,7 @@ public class DiskRegionCache implements CacheStore {
             Files.deleteIfExists(path);
             return Optional.empty();
         }
-        return Optional.of(record.toCacheHit());
+        return Optional.of(record.toEntry());
     }
 
     private boolean isStaleWrite(String key, long incomingVersion) throws IOException {
@@ -125,6 +112,7 @@ public class DiskRegionCache implements CacheStore {
 
     private void writeRecord(Path path, DiskRecord record) throws IOException {
         try (DataOutputStream stream = new DataOutputStream(Files.newOutputStream(path))) {
+            stream.writeUTF(record.typeName());
             stream.writeUTF(record.dataClass().name());
             stream.writeUTF(record.status().name());
             stream.writeLong(record.version());
@@ -137,6 +125,7 @@ public class DiskRegionCache implements CacheStore {
 
     private DiskRecord readRecord(Path path) throws IOException {
         try (DataInputStream stream = new DataInputStream(Files.newInputStream(path))) {
+            String typeName = stream.readUTF();
             DataClass dataClass = DataClass.valueOf(stream.readUTF());
             CacheStatus status = CacheStatus.valueOf(stream.readUTF());
             long version = stream.readLong();
@@ -144,7 +133,7 @@ public class DiskRegionCache implements CacheStore {
             long createdAtEpochMillis = stream.readLong();
             int payloadLength = stream.readInt();
             byte[] payload = stream.readNBytes(payloadLength);
-            return new DiskRecord(dataClass, status, version, ttlMillis, createdAtEpochMillis, payload);
+            return new DiskRecord(typeName, dataClass, status, version, ttlMillis, createdAtEpochMillis, payload);
         }
     }
 
@@ -168,11 +157,7 @@ public class DiskRegionCache implements CacheStore {
         try {
             Files.createDirectories(directory);
         } catch (IOException exception) {
-            throw new CacheException(
-                CacheErrorCode.DISK_IO_ERROR,
-                "Failed to create disk cache directory: " + directory,
-                exception
-            );
+            throw ioException("Failed to create disk cache directory: " + directory, exception);
         }
     }
 
@@ -206,7 +191,12 @@ public class DiskRegionCache implements CacheStore {
         }
     }
 
+    private CacheException ioException(String message, Exception exception) {
+        return new CacheException(CacheErrorCode.DISK_IO_ERROR, message, exception);
+    }
+
     private record DiskRecord(
+        String typeName,
         DataClass dataClass,
         CacheStatus status,
         long version,
@@ -214,33 +204,28 @@ public class DiskRegionCache implements CacheStore {
         long createdAtEpochMillis,
         byte[] payload
     ) {
-        private static DiskRecord fromValue(CacheValue value) {
-            byte[] payload = toPayloadBytes(value.getValue());
-            long createdAt = Instant.now().toEpochMilli();
+        private static DiskRecord fromEntry(CacheEntry entry) {
             return new DiskRecord(
-                value.getDataClass(),
-                value.getStatus(),
-                value.getVersion(),
-                value.getTtl().toMillis(),
-                createdAt,
-                payload
+                entry.getTypeName(),
+                entry.getDataClass(),
+                entry.getStatus(),
+                entry.getVersion(),
+                entry.getTtlMillis(),
+                entry.getCreatedAt().toEpochMilli(),
+                entry.getPayload()
             );
         }
 
-        private CacheValue toCacheHit() {
-            // TODO: replace raw payload handoff with preconfigured Kryo deserializer.
-            return new CacheValue(payload, dataClass, Duration.ofMillis(ttlMillis), CacheStatus.HIT, version);
-        }
-
-        private static byte[] toPayloadBytes(Object value) {
-            if (value == null) {
-                return new byte[0];
-            }
-            if (value instanceof byte[] bytes) {
-                return bytes;
-            }
-            // TODO: replace with Kryo serializer and optional LZ4 compression pipeline.
-            return value.toString().getBytes(StandardCharsets.UTF_8);
+        private CacheEntry toEntry() {
+            return new CacheEntry(
+                payload,
+                typeName,
+                dataClass,
+                ttlMillis,
+                status,
+                version,
+                Instant.ofEpochMilli(createdAtEpochMillis)
+            );
         }
     }
 }

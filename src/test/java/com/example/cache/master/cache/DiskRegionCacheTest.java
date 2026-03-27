@@ -20,41 +20,36 @@ class DiskRegionCacheTest {
     Path tempDir;
 
     @Test
-    void putAndGetShouldRoundTripValueAsBytes() {
+    void putAndGetShouldRoundTripEntry() {
         DiskRegionCache cache = cache();
-        CacheValue value = new CacheValue(
-            "book-content",
-            DataClass.IMMUTABLE,
-            Duration.ofMinutes(10),
-            CacheStatus.COLD,
-            7
-        );
+        CacheEntry value = entry("book-content", 7, Duration.ofMinutes(10));
 
         cache.put("book:42", value);
-        Optional<CacheValue> restored = cache.get("book:42");
+        Optional<CacheEntry> restored = cache.get("book:42");
 
         assertTrue(restored.isPresent());
         assertEquals(7L, restored.get().getVersion());
-        assertArrayEquals("book-content".getBytes(), (byte[]) restored.get().getValue());
+        assertEquals(String.class.getName(), restored.get().getTypeName());
+        assertArrayEquals("book-content".getBytes(), restored.get().getPayload());
     }
 
     @Test
     void putShouldIgnoreOlderVersion() {
         DiskRegionCache cache = cache();
-        cache.put("k", new CacheValue("new", DataClass.IMMUTABLE, Duration.ofMinutes(10), CacheStatus.COLD, 5));
-        cache.put("k", new CacheValue("old", DataClass.IMMUTABLE, Duration.ofMinutes(10), CacheStatus.COLD, 4));
+        cache.put("k", entry("new", 5, Duration.ofMinutes(10)));
+        cache.put("k", entry("old", 4, Duration.ofMinutes(10)));
 
-        Optional<CacheValue> restored = cache.get("k");
+        Optional<CacheEntry> restored = cache.get("k");
 
         assertTrue(restored.isPresent());
         assertEquals(5L, restored.get().getVersion());
-        assertArrayEquals("new".getBytes(), (byte[]) restored.get().getValue());
+        assertArrayEquals("new".getBytes(), restored.get().getPayload());
     }
 
     @Test
     void expiredValueShouldBeRemovedOnRead() throws InterruptedException {
         DiskRegionCache cache = cache();
-        cache.put("ttl", new CacheValue("payload", DataClass.IMMUTABLE, Duration.ofMillis(25), CacheStatus.COLD, 1));
+        cache.put("ttl", entry("payload", 1, Duration.ofMillis(25)));
 
         Thread.sleep(60);
 
@@ -76,15 +71,15 @@ class DiskRegionCacheTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         executor.shutdownNow();
 
-        CacheValue result = cache.get("parallel").orElseThrow();
+        CacheEntry result = cache.get("parallel").orElseThrow();
         assertEquals(30L, result.getVersion());
-        assertArrayEquals("v30".getBytes(), (byte[]) result.getValue());
+        assertArrayEquals("v30".getBytes(), result.getPayload());
     }
 
     @Test
     void deleteShouldRemoveValue() {
         DiskRegionCache cache = cache();
-        cache.put("remove", new CacheValue("payload", DataClass.IMMUTABLE, Duration.ofMinutes(1), CacheStatus.COLD, 1));
+        cache.put("remove", entry("payload", 1, Duration.ofMinutes(1)));
 
         cache.delete("remove");
 
@@ -93,17 +88,14 @@ class DiskRegionCacheTest {
 
     private void updateWithVersion(DiskRegionCache cache, int version, CountDownLatch latch) {
         try {
-            CacheValue value = new CacheValue(
-                "v" + version,
-                DataClass.IMMUTABLE,
-                Duration.ofMinutes(5),
-                CacheStatus.COLD,
-                version
-            );
-            cache.put("parallel", value);
+            cache.put("parallel", entry("v" + version, version, Duration.ofMinutes(5)));
         } finally {
             latch.countDown();
         }
+    }
+
+    private CacheEntry entry(String payload, long version, Duration ttl) {
+        return new CacheEntry(payload.getBytes(), String.class.getName(), DataClass.IMMUTABLE, ttl, CacheStatus.COLD, version);
     }
 
     private DiskRegionCache cache() {

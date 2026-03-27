@@ -3,9 +3,9 @@ package com.example.cache.master.cache;
 import java.util.Optional;
 
 public interface CacheStore {
-    Optional<CacheValue> get(String key);
+    Optional<CacheEntry> get(String key);
 
-    void put(String key, CacheValue value);
+    void put(String key, CacheEntry value);
 
     void delete(String key);
 

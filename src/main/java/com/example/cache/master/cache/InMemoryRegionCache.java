@@ -30,8 +30,8 @@ public class InMemoryRegionCache implements CacheStore {
     }
 
     @Override
-    public Optional<CacheValue> get(String key) {
-        Optional<CacheValue> hotValue = readFromRegion(key, hotRegion);
+    public Optional<CacheEntry> get(String key) {
+        Optional<CacheEntry> hotValue = readFromRegion(key, hotRegion);
         if (hotValue.isPresent()) {
             return hotValue;
         }
@@ -39,9 +39,9 @@ public class InMemoryRegionCache implements CacheStore {
     }
 
     @Override
-    public void put(String key, CacheValue value) {
+    public void put(String key, CacheEntry value) {
         ConcurrentHashMap<String, CacheEntry> target = regions.get(value.getDataClass());
-        CacheEntry candidate = new CacheEntry(value);
+        CacheEntry candidate = value;
         CacheEntry selected = target.compute(key, (ignored, existing) -> selectNewest(candidate, existing));
 
         if (selected != candidate) {
@@ -83,9 +83,9 @@ public class InMemoryRegionCache implements CacheStore {
         return initialized;
     }
 
-    private Optional<CacheValue> readFromRegularRegions(String key) {
+    private Optional<CacheEntry> readFromRegularRegions(String key) {
         for (ConcurrentHashMap<String, CacheEntry> region : regions.values()) {
-            Optional<CacheValue> value = readFromRegion(key, region);
+            Optional<CacheEntry> value = readFromRegion(key, region);
             if (value.isPresent()) {
                 return value;
             }
@@ -94,7 +94,7 @@ public class InMemoryRegionCache implements CacheStore {
         return Optional.empty();
     }
 
-    private Optional<CacheValue> readFromRegion(String key, ConcurrentHashMap<String, CacheEntry> region) {
+    private Optional<CacheEntry> readFromRegion(String key, ConcurrentHashMap<String, CacheEntry> region) {
         CacheEntry entry = region.get(key);
         if (entry == null) {
             return Optional.empty();
@@ -105,7 +105,7 @@ public class InMemoryRegionCache implements CacheStore {
         return handleAliveEntry(key, entry);
     }
 
-    private Optional<CacheValue> handleExpiredEntry(String key,
+    private Optional<CacheEntry> handleExpiredEntry(String key,
                                                     CacheEntry entry,
                                                     ConcurrentHashMap<String, CacheEntry> region) {
         entry.markMiss();
@@ -115,11 +115,11 @@ public class InMemoryRegionCache implements CacheStore {
         return Optional.empty();
     }
 
-    private Optional<CacheValue> handleAliveEntry(String key, CacheEntry entry) {
+    private Optional<CacheEntry> handleAliveEntry(String key, CacheEntry entry) {
         entry.markHit();
         totalHits.incrementAndGet();
         promoteToHotRegionIfNeeded(key, entry);
-        return Optional.of(entry.getCacheValue().withStatus(CacheStatus.HIT));
+        return Optional.of(entry);
     }
 
     private void promoteToHotRegionIfNeeded(String key, CacheEntry entry) {
@@ -136,7 +136,7 @@ public class InMemoryRegionCache implements CacheStore {
         return candidate.getVersion() >= existing.getVersion() ? candidate : existing;
     }
 
-    private void updateHotRegion(String key, CacheEntry candidate, CacheValue value) {
+    private void updateHotRegion(String key, CacheEntry candidate, CacheEntry value) {
         if (value.getStatus() == CacheStatus.HOT) {
             hotRegion.compute(key, (ignored, existing) -> selectNewest(candidate, existing));
             return;

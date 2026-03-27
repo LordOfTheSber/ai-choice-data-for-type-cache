@@ -40,6 +40,11 @@ cache:
     enabled: true
     path: ./data/l3-cache
     lock-stripes: 64
+  serialization:
+    compression-enabled: true
+    compression-threshold-bytes: 8192
+    output-buffer-initial-bytes: 512
+    output-buffer-max-bytes: 4194304
 
 cluster:
   heartbeat-timeout-millis: 5000
