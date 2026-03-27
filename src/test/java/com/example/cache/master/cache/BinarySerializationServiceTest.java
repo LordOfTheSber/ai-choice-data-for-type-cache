@@ -1,13 +1,14 @@
 package com.example.cache.master.cache;
 
-import com.example.cache.master.cache.config.KryoConfig;
 import com.example.cache.master.cache.config.SerializationProperties;
 import com.example.cache.master.cache.error.SerializationException;
 import com.example.cache.master.cache.serialization.BinarySerializationService;
+import com.example.cache.master.cache.serialization.KryoPayloadSerializer;
 import com.example.cache.master.cache.serialization.dto.BookCacheDto;
 import com.example.cache.master.cache.serialization.dto.BookHistoryEventDto;
 import com.example.cache.master.cache.serialization.dto.BookMetadataDto;
 import com.example.cache.master.cache.serialization.dto.BookRatingDto;
+import com.example.cache.master.cache.config.KryoConfig;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -64,6 +65,7 @@ class BinarySerializationServiceTest {
     private BinarySerializationService serviceWithThreshold(int thresholdBytes) {
         SerializationProperties properties = new SerializationProperties();
         properties.setCompressionThresholdBytes(thresholdBytes);
-        return new BinarySerializationService(new KryoConfig().kryoFactory(), properties);
+        KryoPayloadSerializer kryo = new KryoPayloadSerializer(new KryoConfig().kryoFactory(), properties);
+        return new BinarySerializationService(properties, kryo);
     }
 }

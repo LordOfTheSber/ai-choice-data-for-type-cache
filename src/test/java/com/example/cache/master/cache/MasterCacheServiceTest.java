@@ -1,8 +1,9 @@
 package com.example.cache.master.cache;
 
-import com.example.cache.master.cache.config.KryoConfig;
 import com.example.cache.master.cache.config.SerializationProperties;
 import com.example.cache.master.cache.serialization.BinarySerializationService;
+import com.example.cache.master.cache.serialization.KryoPayloadSerializer;
+import com.example.cache.master.cache.config.KryoConfig;
 import com.example.cache.master.support.TestCachePropertiesFactory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -93,6 +94,8 @@ class MasterCacheServiceTest {
     }
 
     private BinarySerializationService binaryService() {
-        return new BinarySerializationService(new KryoConfig().kryoFactory(), new SerializationProperties());
+        SerializationProperties properties = new SerializationProperties();
+        KryoPayloadSerializer kryo = new KryoPayloadSerializer(new KryoConfig().kryoFactory(), properties);
+        return new BinarySerializationService(properties, kryo);
     }
 }

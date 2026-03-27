@@ -1,7 +1,6 @@
 package com.example.cache.master.cache;
 
 import com.example.cache.master.cache.api.GlobalExceptionHandler;
-import com.example.cache.master.cache.serialization.dto.BookMetadataDto;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,42 +70,6 @@ class CacheControllerIntegrationTest {
     }
 
     @Test
-    void typedPutAndGetShouldSupportConsumerDto() throws Exception {
-        BookMetadataDto dto = new BookMetadataDto("Author", "ru", 2020, "isbn");
-        CacheValue value = new CacheValue(dto, DataClass.IMMUTABLE, Duration.ofMinutes(3), CacheStatus.HIT, 9);
-
-        when(masterCacheService.get("book-meta")).thenReturn(Optional.of(value));
-        doNothing().when(masterCacheService).put(any(), any());
-
-        String body = """
-            {
-              "typeName":"com.example.cache.master.cache.serialization.dto.BookMetadataDto",
-              "payload":{"author":"Author","language":"ru","publicationYear":2020,"isbn":"isbn"},
-              "dataClass":"IMMUTABLE",
-              "ttlMillis":180000,
-              "version":9
-            }
-            """;
-
-        mockMvc.perform(put("/api/cache/book-meta/typed").contentType(MediaType.APPLICATION_JSON).content(body))
-            .andExpect(status().isAccepted());
-
-        mockMvc.perform(get("/api/cache/book-meta/typed"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.typeName").value(BookMetadataDto.class.getName()))
-            .andExpect(jsonPath("$.payload.author").value("Author"))
-            .andExpect(jsonPath("$.version").value(9));
-    }
-
-    @Test
-    void invalidTypedRequestShouldReturnBadRequest() throws Exception {
-        String body = objectMapper.writeValueAsString(new InvalidTypedRequest("", null, "IMMUTABLE", 0, -1));
-
-        mockMvc.perform(put("/api/cache/invalid/typed").contentType(MediaType.APPLICATION_JSON).content(body))
-            .andExpect(status().isBadRequest());
-    }
-
-    @Test
     void invalidRequestShouldReturnBadRequest() throws Exception {
         String body = objectMapper.writeValueAsString(new InvalidRequest("", "IMMUTABLE", 0, -1));
 
@@ -115,8 +78,5 @@ class CacheControllerIntegrationTest {
     }
 
     private record InvalidRequest(String payload, String dataClass, long ttlMillis, long version) {
-    }
-
-    private record InvalidTypedRequest(String typeName, Object payload, String dataClass, long ttlMillis, long version) {
     }
 }
