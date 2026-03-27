@@ -1,7 +1,8 @@
 package com.example.cache.master.cache;
 
 import com.example.cache.master.cache.config.CacheProperties;
-import com.example.cache.master.cache.error.CacheValidationException;
+import com.example.cache.master.cache.error.CacheErrorCode;
+import com.example.cache.master.cache.error.CacheException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.lang.Nullable;
@@ -77,7 +78,7 @@ public class MasterCacheService {
 
     private void validateKey(String key) {
         if (key == null || key.isBlank()) {
-            throw new CacheValidationException("key must not be blank");
+            throw new CacheException(CacheErrorCode.VALIDATION_ERROR, "key must not be blank");
         }
     }
 }

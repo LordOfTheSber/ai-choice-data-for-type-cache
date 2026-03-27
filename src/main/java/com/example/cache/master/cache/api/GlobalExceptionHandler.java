@@ -1,7 +1,7 @@
 package com.example.cache.master.cache.api;
 
+import com.example.cache.master.cache.error.CacheErrorCode;
 import com.example.cache.master.cache.error.CacheException;
-import com.example.cache.master.cache.error.CacheValidationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -12,19 +12,22 @@ import java.time.Instant;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler(CacheValidationException.class)
-    public ResponseEntity<ErrorResponse> handleValidation(CacheValidationException exception) {
-        return buildResponse(HttpStatus.BAD_REQUEST, exception.getMessage());
-    }
-
     @ExceptionHandler(CacheException.class)
     public ResponseEntity<ErrorResponse> handleCacheError(CacheException exception) {
-        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, exception.getMessage());
+        HttpStatus status = statusFor(exception.getErrorCode());
+        return buildResponse(status, exception.getMessage());
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception exception) {
         return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Unexpected server error");
+    }
+
+    private HttpStatus statusFor(CacheErrorCode errorCode) {
+        if (errorCode == CacheErrorCode.VALIDATION_ERROR) {
+            return HttpStatus.BAD_REQUEST;
+        }
+        return HttpStatus.INTERNAL_SERVER_ERROR;
     }
 
     private ResponseEntity<ErrorResponse> buildResponse(HttpStatus status, String message) {

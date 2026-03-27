@@ -1,11 +1,19 @@
 package com.example.cache.master.cache.error;
 
 public class CacheException extends RuntimeException {
-    public CacheException(String message) {
+    private final CacheErrorCode errorCode;
+
+    public CacheException(CacheErrorCode errorCode, String message) {
         super(message);
+        this.errorCode = errorCode;
     }
 
-    public CacheException(String message, Throwable cause) {
+    public CacheException(CacheErrorCode errorCode, String message, Throwable cause) {
         super(message, cause);
+        this.errorCode = errorCode;
+    }
+
+    public CacheErrorCode getErrorCode() {
+        return errorCode;
     }
 }

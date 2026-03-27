@@ -1,7 +1,8 @@
 package com.example.cache.master.cache;
 
 import com.example.cache.master.cache.config.CacheProperties;
-import com.example.cache.master.cache.error.CacheIoException;
+import com.example.cache.master.cache.error.CacheErrorCode;
+import com.example.cache.master.cache.error.CacheException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -42,7 +43,11 @@ public class DiskRegionCache implements CacheStore {
         try {
             return readValue(key);
         } catch (IOException exception) {
-            throw new CacheIoException("Failed to read disk cache for key=" + key, exception);
+            throw new CacheException(
+                CacheErrorCode.DISK_IO_ERROR,
+                "Failed to read disk cache for key=" + key,
+                exception
+            );
         } finally {
             lock.unlock();
         }
@@ -59,7 +64,11 @@ public class DiskRegionCache implements CacheStore {
             }
             writeRecordAtomically(pathForKey(key), DiskRecord.fromValue(value));
         } catch (IOException exception) {
-            throw new CacheIoException("Failed to write disk cache for key=" + key, exception);
+            throw new CacheException(
+                CacheErrorCode.DISK_IO_ERROR,
+                "Failed to write disk cache for key=" + key,
+                exception
+            );
         } finally {
             lock.unlock();
         }
@@ -72,7 +81,11 @@ public class DiskRegionCache implements CacheStore {
         try {
             Files.deleteIfExists(pathForKey(key));
         } catch (IOException exception) {
-            throw new CacheIoException("Failed to delete disk cache for key=" + key, exception);
+            throw new CacheException(
+                CacheErrorCode.DISK_IO_ERROR,
+                "Failed to delete disk cache for key=" + key,
+                exception
+            );
         } finally {
             lock.unlock();
         }
@@ -155,7 +168,11 @@ public class DiskRegionCache implements CacheStore {
         try {
             Files.createDirectories(directory);
         } catch (IOException exception) {
-            throw new CacheIoException("Failed to create disk cache directory: " + directory, exception);
+            throw new CacheException(
+                CacheErrorCode.DISK_IO_ERROR,
+                "Failed to create disk cache directory: " + directory,
+                exception
+            );
         }
     }
 
@@ -185,7 +202,7 @@ public class DiskRegionCache implements CacheStore {
             byte[] hash = digest.digest(key.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(hash);
         } catch (NoSuchAlgorithmException exception) {
-            throw new CacheIoException("SHA-256 is unavailable", exception);
+            throw new CacheException(CacheErrorCode.INTERNAL_ERROR, "SHA-256 is unavailable", exception);
         }
     }
 
