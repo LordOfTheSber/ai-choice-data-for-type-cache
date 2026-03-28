@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: master-service
+  profiles:
+    default: prom
+
+server:
+  port: 8443
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+master:
+  nodeId: master-node-01
+  balancer:
+    baseUrl: https://balancer:8443
+  cache:
+    limits:
+      classA:
+        maxEntries: 50000
+        maxMemoryMb: 512
+      classB:
+        maxEntries: 100000
+        maxMemoryMb: 1024
+      classC:
+        maxEntries: 200000
+        maxMemoryMb: 2048
+
+cache:
+  hot-region:
+    promotion-threshold: 5
+  l3:
+    enabled: true
+    path: ./data/l3-cache
+    lock-stripes: 64
+  serialization:
+    compression-enabled: true
+    compression-threshold-bytes: 8192
+    output-buffer-initial-bytes: 512
+    output-buffer-max-bytes: 4194304
+
+cluster:
+  heartbeat-timeout-millis: 5000
