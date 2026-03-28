@@ -21,6 +21,7 @@ import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.asn1.x509.GeneralName;
 import org.bouncycastle.asn1.x509.GeneralNames;
+import org.bouncycastle.cert.CertIOException;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
@@ -48,7 +49,7 @@ public class CertificateIssuanceService {
             CaMaterial caMaterial = certificateAuthorityService.getCaMaterial();
             IssuedCertificate issuedCertificate = issue(request, caMaterial, keyPair);
             return toResponse(issuedCertificate, keyPair, caMaterial);
-        } catch (GeneralSecurityException | OperatorCreationException exception) {
+        } catch (GeneralSecurityException | OperatorCreationException | CertIOException exception) {
             throw new CertificateServiceException(
                     CertificateErrorCode.CERTIFICATE_ISSUANCE_FAILED,
                     "Failed to issue certificate",
@@ -74,7 +75,7 @@ public class CertificateIssuanceService {
     }
 
     private IssuedCertificate issue(CertificateRequest request, CaMaterial caMaterial, KeyPair keyPair)
-            throws OperatorCreationException, GeneralSecurityException {
+            throws OperatorCreationException, GeneralSecurityException, CertIOException {
         Instant notBefore = Instant.now().minusSeconds(60);
         Instant notAfter = notBefore.plus(certificateProperties.getIssuedCertificateTtl());
         X509v3CertificateBuilder builder = buildCertificate(request, caMaterial, keyPair, notBefore, notAfter);
@@ -93,7 +94,7 @@ public class CertificateIssuanceService {
             KeyPair keyPair,
             Instant notBefore,
             Instant notAfter
-    ) throws OperatorCreationException {
+    ) throws CertIOException {
         BigInteger serialNumber = new BigInteger(160, secureRandom).abs();
         X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(
                 caMaterial.certificate().getSubjectX500Principal(),
@@ -108,7 +109,7 @@ public class CertificateIssuanceService {
     }
 
     private void addSubjectAlternativeNames(X509v3CertificateBuilder builder, List<String> dnsNames)
-            throws OperatorCreationException {
+            throws CertIOException {
         GeneralName[] names = new GeneralName[dnsNames.size()];
         for (int index = 0; index < dnsNames.size(); index++) {
             names[index] = new GeneralName(GeneralName.dNSName, dnsNames.get(index));
