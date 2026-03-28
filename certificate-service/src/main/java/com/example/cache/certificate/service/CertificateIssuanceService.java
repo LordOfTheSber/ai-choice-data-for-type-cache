@@ -14,10 +14,10 @@ import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
+import javax.security.auth.x500.X500Principal;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bouncycastle.asn1.DERSequence;
-import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.asn1.x509.GeneralName;
 import org.bouncycastle.asn1.x509.GeneralNames;
@@ -100,7 +100,7 @@ public class CertificateIssuanceService {
                 serialNumber,
                 Date.from(notBefore),
                 Date.from(notAfter),
-                new X500Name("CN=" + request.commonName()),
+                new X500Principal("CN=" + request.commonName()),
                 keyPair.getPublic()
         );
         addSubjectAlternativeNames(builder, request.dnsNames());
