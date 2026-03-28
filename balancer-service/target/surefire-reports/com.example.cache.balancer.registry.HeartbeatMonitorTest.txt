@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.example.cache.balancer.registry.HeartbeatMonitorTest
--------------------------------------------------------------------------------
-Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.523 s -- in com.example.cache.balancer.registry.HeartbeatMonitorTest
