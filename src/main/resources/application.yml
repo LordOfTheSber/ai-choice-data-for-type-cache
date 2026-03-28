@@ -1,11 +1,16 @@
 spring:
   application:
-    name: master-service
-  profiles:
-    default: prom
+    name: certificate-service
 
 server:
   port: 8443
+  ssl:
+    enabled: true
+    protocol: TLS
+    enabled-protocols: TLSv1.3
+    key-store-type: PKCS12
+    key-store: classpath:tls/server.p12
+    key-store-password: changeit
 
 management:
   endpoints:
@@ -17,34 +22,20 @@ management:
       probes:
         enabled: true
 
-master:
-  nodeId: master-node-01
-  balancer:
-    baseUrl: https://balancer:8443
-  cache:
-    limits:
-      classA:
-        maxEntries: 50000
-        maxMemoryMb: 512
-      classB:
-        maxEntries: 100000
-        maxMemoryMb: 1024
-      classC:
-        maxEntries: 200000
-        maxMemoryMb: 2048
+certificate:
+  ca-directory: ./data/ca
+  ca-certificate-file: root-ca.crt.pem
+  ca-private-key-file: root-ca.key.pem
+  ca-private-key-password: changeit
+  issued-certificate-ttl: PT12H
+  trusted-service-ids:
+    - master
+    - balancer
+    - db-service
+  ca-key-size: 3072
+  issued-key-size: 2048
+  signature-algorithm: SHA256withRSA
 
-cache:
-  hot-region:
-    promotion-threshold: 5
-  l3:
+jetty:
+  http3:
     enabled: true
-    path: ./data/l3-cache
-    lock-stripes: 64
-  serialization:
-    compression-enabled: true
-    compression-threshold-bytes: 8192
-    output-buffer-initial-bytes: 512
-    output-buffer-max-bytes: 4194304
-
-cluster:
-  heartbeat-timeout-millis: 5000
