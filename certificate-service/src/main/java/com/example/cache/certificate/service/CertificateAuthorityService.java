@@ -22,25 +22,23 @@ import java.util.Date;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.X509v3CertificateBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.operator.ContentSigner;
-import org.bouncycastle.operator.InputDecryptorProvider;
 import org.bouncycastle.operator.OperatorCreationException;
-import org.bouncycastle.operator.OutputEncryptor;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.openssl.MiscPEMGenerator;
+import org.bouncycastle.openssl.PEMDecryptorProvider;
+import org.bouncycastle.openssl.PEMEncryptedKeyPair;
 import org.bouncycastle.openssl.PEMKeyPair;
+import org.bouncycastle.openssl.PEMEncryptor;
 import org.bouncycastle.openssl.PEMParser;
-import org.bouncycastle.openssl.PKCS8Generator;
 import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
-import org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8EncryptorBuilder;
-import org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo;
-import org.bouncycastle.pkcs.PKCSException;
-import org.bouncycastle.pkcs.jcajce.JcePKCSPBEInputDecryptorProviderBuilder;
+import org.bouncycastle.openssl.jcajce.JcePEMDecryptorProviderBuilder;
+import org.bouncycastle.openssl.jcajce.JcePEMEncryptorBuilder;
 import org.springframework.stereotype.Service;
 
 @Slf4j
@@ -89,7 +87,7 @@ public class CertificateAuthorityService {
             CaMaterial generatedMaterial = generateCaMaterial();
             persistCaMaterial(generatedMaterial);
             return generatedMaterial;
-        } catch (IOException | GeneralSecurityException | OperatorCreationException | PKCSException exception) {
+        } catch (IOException | GeneralSecurityException | OperatorCreationException exception) {
             throw new CertificateServiceException(
                     CertificateErrorCode.CA_INITIALIZATION_FAILED,
                     "Failed to initialize Certificate Authority",
@@ -107,8 +105,7 @@ public class CertificateAuthorityService {
                 && Files.exists(certificateProperties.caPrivateKeyPath());
     }
 
-    private CaMaterial readCaMaterial()
-            throws IOException, GeneralSecurityException, OperatorCreationException, PKCSException {
+    private CaMaterial readCaMaterial() throws IOException, GeneralSecurityException, OperatorCreationException {
         X509Certificate certificate = readCertificate(certificateProperties.caCertificatePath());
         PrivateKey privateKey = readPrivateKey(certificateProperties.caPrivateKeyPath());
         return new CaMaterial(certificate, privateKey);
@@ -155,19 +152,17 @@ public class CertificateAuthorityService {
         }
     }
 
-    private PrivateKey readPrivateKey(Path privateKeyPath)
-            throws IOException, OperatorCreationException, PKCSException {
+    private PrivateKey readPrivateKey(Path privateKeyPath) throws IOException, OperatorCreationException {
         try (Reader reader = Files.newBufferedReader(privateKeyPath); PEMParser parser = new PEMParser(reader)) {
             Object keyObject = parser.readObject();
             return resolvePrivateKey(keyObject);
         }
     }
 
-    private PrivateKey resolvePrivateKey(Object keyObject)
-            throws OperatorCreationException, IOException, PKCSException {
+    private PrivateKey resolvePrivateKey(Object keyObject) throws OperatorCreationException {
         JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider(BC_PROVIDER);
-        if (keyObject instanceof PKCS8EncryptedPrivateKeyInfo encryptedPrivateKeyInfo) {
-            return decryptPrivateKey(converter, encryptedPrivateKeyInfo);
+        if (keyObject instanceof PEMEncryptedKeyPair encryptedKeyPair) {
+            return decryptPrivateKey(converter, encryptedKeyPair);
         }
         if (keyObject instanceof PEMKeyPair pemKeyPair) {
             return converter.getKeyPair(pemKeyPair).getPrivate();
@@ -180,12 +175,12 @@ public class CertificateAuthorityService {
 
     private PrivateKey decryptPrivateKey(
             JcaPEMKeyConverter converter,
-            PKCS8EncryptedPrivateKeyInfo encryptedInfo
-    ) throws OperatorCreationException, PKCSException {
-        InputDecryptorProvider decryptorProvider = new JcePKCSPBEInputDecryptorProviderBuilder()
-                .setProvider(BC_PROVIDER).build(certificateProperties.getCaPrivateKeyPasswordChars());
-        PrivateKeyInfo privateKeyInfo = encryptedInfo.decryptPrivateKeyInfo(decryptorProvider);
-        return converter.getPrivateKey(privateKeyInfo);
+            PEMEncryptedKeyPair encryptedKeyPair
+    ) throws OperatorCreationException {
+        PEMDecryptorProvider decryptorProvider = new JcePEMDecryptorProviderBuilder()
+                .build(certificateProperties.getCaPrivateKeyPasswordChars());
+        PEMKeyPair keyPair = encryptedKeyPair.decryptKeyPair(decryptorProvider);
+        return converter.getPrivateKey(keyPair.getPrivateKeyInfo());
     }
 
     private void writeCertificate(Path outputPath, X509Certificate certificate) throws IOException {
@@ -198,19 +193,17 @@ public class CertificateAuthorityService {
     private void writeEncryptedPrivateKey(Path outputPath, PrivateKey privateKey)
             throws IOException, OperatorCreationException {
         try (Writer writer = Files.newBufferedWriter(outputPath); JcaPEMWriter pemWriter = new JcaPEMWriter(writer)) {
-            PKCS8Generator generator = encryptedKeyGenerator(privateKey);
+            MiscPEMGenerator generator = encryptedKeyGenerator(privateKey);
             pemWriter.writeObject(generator);
             pemWriter.flush();
         }
     }
 
-    private PKCS8Generator encryptedKeyGenerator(PrivateKey privateKey) throws OperatorCreationException {
-        OutputEncryptor encryptor = new JceOpenSSLPKCS8EncryptorBuilder(PKCS8Generator.AES_256_CBC)
+    private MiscPEMGenerator encryptedKeyGenerator(PrivateKey privateKey) throws OperatorCreationException {
+        PEMEncryptor encryptor = new JcePEMEncryptorBuilder("AES-256-CBC")
                 .setProvider(BC_PROVIDER)
-                .setRandom(secureRandom)
-                .setPasssword(certificateProperties.getCaPrivateKeyPasswordChars())
-                .build();
-        PrivateKeyInfo privateKeyInfo = PrivateKeyInfo.getInstance(privateKey.getEncoded());
-        return new PKCS8Generator(privateKeyInfo, encryptor);
+                .setSecureRandom(secureRandom)
+                .build(certificateProperties.getCaPrivateKeyPasswordChars());
+        return new MiscPEMGenerator(privateKey, encryptor);
     }
 }
