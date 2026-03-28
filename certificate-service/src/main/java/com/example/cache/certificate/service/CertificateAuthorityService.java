@@ -32,14 +32,15 @@ import org.bouncycastle.operator.InputDecryptorProvider;
 import org.bouncycastle.operator.OperatorCreationException;
 import org.bouncycastle.operator.OutputEncryptor;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-import org.bouncycastle.operator.jcajce.JceOpenSSLPKCS8DecryptorProviderBuilder;
 import org.bouncycastle.openssl.PEMKeyPair;
 import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.PKCS8Generator;
-import org.bouncycastle.openssl.PKCS8EncryptedPrivateKeyInfo;
 import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
 import org.bouncycastle.openssl.jcajce.JceOpenSSLPKCS8EncryptorBuilder;
+import org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo;
+import org.bouncycastle.pkcs.PKCSException;
+import org.bouncycastle.pkcs.jcajce.JcePKCSPBEInputDecryptorProviderBuilder;
 import org.springframework.stereotype.Service;
 
 @Slf4j
@@ -88,7 +89,7 @@ public class CertificateAuthorityService {
             CaMaterial generatedMaterial = generateCaMaterial();
             persistCaMaterial(generatedMaterial);
             return generatedMaterial;
-        } catch (IOException | GeneralSecurityException | OperatorCreationException exception) {
+        } catch (IOException | GeneralSecurityException | OperatorCreationException | PKCSException exception) {
             throw new CertificateServiceException(
                     CertificateErrorCode.CA_INITIALIZATION_FAILED,
                     "Failed to initialize Certificate Authority",
@@ -106,7 +107,8 @@ public class CertificateAuthorityService {
                 && Files.exists(certificateProperties.caPrivateKeyPath());
     }
 
-    private CaMaterial readCaMaterial() throws IOException, GeneralSecurityException, OperatorCreationException {
+    private CaMaterial readCaMaterial()
+            throws IOException, GeneralSecurityException, OperatorCreationException, PKCSException {
         X509Certificate certificate = readCertificate(certificateProperties.caCertificatePath());
         PrivateKey privateKey = readPrivateKey(certificateProperties.caPrivateKeyPath());
         return new CaMaterial(certificate, privateKey);
@@ -153,14 +155,16 @@ public class CertificateAuthorityService {
         }
     }
 
-    private PrivateKey readPrivateKey(Path privateKeyPath) throws IOException, OperatorCreationException {
+    private PrivateKey readPrivateKey(Path privateKeyPath)
+            throws IOException, OperatorCreationException, PKCSException {
         try (Reader reader = Files.newBufferedReader(privateKeyPath); PEMParser parser = new PEMParser(reader)) {
             Object keyObject = parser.readObject();
             return resolvePrivateKey(keyObject);
         }
     }
 
-    private PrivateKey resolvePrivateKey(Object keyObject) throws OperatorCreationException, IOException {
+    private PrivateKey resolvePrivateKey(Object keyObject)
+            throws OperatorCreationException, IOException, PKCSException {
         JcaPEMKeyConverter converter = new JcaPEMKeyConverter().setProvider(BC_PROVIDER);
         if (keyObject instanceof PKCS8EncryptedPrivateKeyInfo encryptedPrivateKeyInfo) {
             return decryptPrivateKey(converter, encryptedPrivateKeyInfo);
@@ -174,11 +178,12 @@ public class CertificateAuthorityService {
         );
     }
 
-    private PrivateKey decryptPrivateKey(JcaPEMKeyConverter converter, PKCS8EncryptedPrivateKeyInfo encryptedInfo)
-            throws OperatorCreationException, IOException {
-        InputDecryptorProvider decryptorProvider = new JceOpenSSLPKCS8DecryptorProviderBuilder()
-                .setProvider(BC_PROVIDER)
-                .build(certificateProperties.getCaPrivateKeyPasswordChars());
+    private PrivateKey decryptPrivateKey(
+            JcaPEMKeyConverter converter,
+            PKCS8EncryptedPrivateKeyInfo encryptedInfo
+    ) throws OperatorCreationException, PKCSException {
+        InputDecryptorProvider decryptorProvider = new JcePKCSPBEInputDecryptorProviderBuilder()
+                .setProvider(BC_PROVIDER).build(certificateProperties.getCaPrivateKeyPasswordChars());
         PrivateKeyInfo privateKeyInfo = encryptedInfo.decryptPrivateKeyInfo(decryptorProvider);
         return converter.getPrivateKey(privateKeyInfo);
     }
