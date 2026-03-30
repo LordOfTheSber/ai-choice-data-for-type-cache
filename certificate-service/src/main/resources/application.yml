@@ -1,0 +1,41 @@
+spring:
+  application:
+    name: certificate-service
+
+server:
+  port: 8443
+  ssl:
+    enabled: true
+    protocol: TLS
+    enabled-protocols: TLSv1.3
+    key-store-type: PKCS12
+    key-store: classpath:tls/server.p12
+    key-store-password: changeit
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+certificate:
+  ca-directory: ./data/ca
+  ca-certificate-file: root-ca.crt.pem
+  ca-private-key-file: root-ca.key.pem
+  ca-private-key-password: changeit
+  issued-certificate-ttl: PT12H
+  trusted-service-ids:
+    - master
+    - balancer
+    - db-service
+  ca-key-size: 3072
+  issued-key-size: 2048
+  signature-algorithm: SHA256withRSA
+
+jetty:
+  http3:
+    enabled: true
